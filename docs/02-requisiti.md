@@ -1,12 +1,14 @@
 # Requirements: RentCar (multi-tenant car rental SaaS)
 
-Version 1.2 · 2026-11-01 · Owner: requirements-analyst · Status: GATE 1 content plus GATE 2 security/architecture deltas (all REQ-1..REQ-16 questions answered and integrated)
+Version 1.3 · 2026-11-01 · Owner: requirements-analyst · Status: GATE 1 content plus GATE 2 and Phase 4 wave A deltas (change log v1.3 below) (all REQ-1..REQ-16 questions answered and integrated)
 Sources: `docs/spec/car-rental-spec.md` (primary), `docs/01-discovery.md`, `docs/00-stato-progetto.md`, `docs/pm/raid.md`, user answers to REQ-1..REQ-16 (2026-11-01).
 Language: English (decision 2026-11-01). Spec section references are written `§n`; spec acceptance criteria `AC1`..`AC11`.
 
 Conventions: priority uses MoSCoW (M/S/C/W). `A-nn` = assumption made by the analyst, to be confirmed (section 9). `REQ-n` = decision already taken by the user (section 10). No technology is chosen here beyond what spec §2 already fixes.
 
 Change log v1.1: day count by calendar days; automatic status transitions with manual override; revenue from completed bookings only (by return date); closed years correctable with versioned snapshots; 7-day grace on expiry; all extras in scope (admin new-booking email, owner emails, CSV exports, audit log); bookings fully editable by the admin; one admin per tenant with systemadmin recovery. Assumption numbering was rebuilt from scratch (A-1..A-39) and every reference re-checked.
+
+Change log v1.3 (Phase 4 wave A, 2026-11-01): booking code = 10 chars Crockford base32 (50 bits), unique per tenant (A-12, NFR-SEC-07); tenant fields: title max 45, optional description max 160, optional all-or-none address, generated OG image (FR-SYS-02, FR-PUB-14); pending-GATE-3 assumptions A-40 (tenant `country_code`, default IT) and A-41 (`dpa_signed_at`); SEO: only `/{slug}` root indexable, FR-PUB-14 promoted to Must, `PUBLIC_INDEXING_ENABLED` (default false); NFR-PERF-01 adds TTFB p75 <= 800 ms and JS <= 150 kB gzip on the public root; Agenda view added to the calendar (FR-CAL-02, NFR-A11Y-02); credential emails never stored or auto-retried (FR-MAIL-06).
 
 Change log v1.2 (GATE 2 deltas, decisions 2026-11-01): security level OWASP ASVS 4.0.3 L2; password minimum length 12; temporary passwords replaced by a one-time set-password link valid 24 h (SEC-3, deliberate deviation from spec §4; AC2 is satisfied by "the admin receives an activation email"); no card numbers or identity documents stored, with warnings on notes fields (SEC-5); vehicle photo limit 4 MB with client-side downscale (ARC-4); tenant termination procedure with export and hard deletion after 90 days (SEC-7); customer data export promoted to Must; mandatory SSRF guard on tenant SMTP host; health endpoints `/api/healthz` and `/api/readyz`. Accepted residual risks (no MFA, no SMTP-change re-authentication or notification, no CAPTCHA switch) are not requirements; see `docs/security/registro-rischi.md`.
 
@@ -143,7 +145,7 @@ M1 platform + auth + systemadmin + tenants/subscriptions (AC1, AC2) · M2 vehicl
 | ID | Requirement | Pri | Spec |
 |---|---|---|---|
 | FR-SYS-01 | List tenants (name, slug, status, subscription state, end date, vehicle/operator counts) with search and pagination. | M | §8 |
-| FR-SYS-02 | Create tenant: name, slug, contact info, title, status, time zone (default Europe/Rome), currency (default EUR). Slug unique, URL-safe, not reserved, immutable (A-5). | M | §5 |
+| FR-SYS-02 | Create tenant: name, slug, contact info, title (max 45 characters), optional short description (max 160 characters), optional structured address (street, postal code, city, country: all fields or none), country code (ISO 3166-1, default IT, A-40), status, time zone (default Europe/Rome), currency (default EUR). Slug unique, URL-safe, not reserved, immutable (A-5). Onboarding includes a required "DPA signed" checkbox that records `dpa_signed_at` (A-41). | M | §5 |
 | FR-SYS-03 | Edit tenant data, logo, colors, SMTP config (password encrypted, never shown again). | M | §4, §5 |
 | FR-SYS-04 | Suspend and reactivate a tenant (effect: FR-SYS-12). | M | §4, §5 |
 | FR-SYS-05 | Create subscription: maxVehicles, maxOperators, startDate, endDate, price, currency, status. | M | §5 |
@@ -215,7 +217,7 @@ M1 platform + auth + systemadmin + tenants/subscriptions (AC1, AC2) · M2 vehicl
 | FR-PUB-11 | Price at search equals the stored snapshot; if the vehicle price changed between search and submit, the new price is shown before final confirmation. | M | §6, §9 |
 | FR-PUB-12 | Price calculation is one pure, extensible function `(vehicle, period, tenant rules) -> breakdown`, used by search, public booking, admin booking/edit and PDF. Rule (REQ-1): **billed days = calendar days touched in the tenant time zone**; total = days x daily price; same-day rental = 1 day; a return at exactly 00:00 does not touch the new day (A-11). | M | §6 |
 | FR-PUB-13 | No non-essential cookies or third-party requests on public pages. | M | §10.2 |
-| FR-PUB-14 | Minimal SEO baseline: title and description from tenant title; `noindex` on confirmation, 404 and unavailable pages. | S | discovery E20 |
+| FR-PUB-14 | SEO baseline (SEO-1/3/4): **only the `/{slug}` root page is indexable**; every other public page (results, booking form, confirmation, 404, unavailable, admin, system) is `noindex`. Root page metadata: title from tenant title (max 45 chars), description from the tenant's short description (max 160 chars, fallback generated from name and city), canonical URL, an Open Graph image generated from the tenant logo and primary color, and structured business data (name, contact, address when given). Indexing is globally controlled by the config switch `PUBLIC_INDEXING_ENABLED` (default `false`: all pages `noindex` and robots disallow; set `true` in production when ready). | M | discovery E20 |
 
 **US-020 Search availability** (M · FR-PUB-02/03 · AC3)
 - Given vehicle V has a confirmed booking 1 Jun 10:00 to 3 Jun 10:00, When I search 2 Jun 09:00 to 4 Jun 09:00, Then V is not listed.
@@ -258,7 +260,7 @@ M1 platform + auth + systemadmin + tenants/subscriptions (AC1, AC2) · M2 vehicl
 | ID | Requirement | Pri | Spec |
 |---|---|---|---|
 | FR-CAL-01 | Grid view: vehicles as rows sorted by name (case-insensitive, natural order), days as columns, bookings across the days they cover. | M | §7.1 |
-| FR-CAL-02 | Switchable views: grid (default on desktop), month, week, day (default on small screens). | M | §7.1 |
+| FR-CAL-02 | Switchable views: grid (default on desktop), month, week, day (default on small screens), plus an **Agenda** view (list of bookings per day, chronological, with vehicle, customer, times and status) as the accessible, non-visual equivalent of the grid (UX-8, NFR-A11Y-02). | M | §7.1 |
 | FR-CAL-03 | Today's column/cell highlighted with a distinct color, in the tenant time zone; not by color alone. | M | §7.1 |
 | FR-CAL-04 | Clicking a booking opens its details; operators read-only. | M | §7.1 |
 | FR-CAL-05 | Previous/next/today controls and date picker; period in URL. | M | gap |
@@ -279,6 +281,15 @@ M1 platform + auth + systemadmin + tenants/subscriptions (AC1, AC2) · M2 vehicl
 
 **US-032 Mobile calendar** (M · FR-UX-05 · AC11)
 - Given 375px, Then day view is default, the grid scrolls horizontally with a sticky vehicle-name column, and the page does not scroll horizontally.
+
+**US-033 Agenda view** (M · FR-CAL-02, NFR-A11Y-02)
+- Given bookings on several days, When I choose Agenda, Then bookings are listed chronologically grouped by day (tenant time zone) with vehicle, customer, times and status, and each item opens the booking detail.
+- Given a keyboard or screen-reader user, Then every item is reachable and announced in order without using the grid.
+- Given no bookings in the range, Then an empty state is shown.
+
+**US-034 Indexing control** (M · FR-PUB-14)
+- Given `PUBLIC_INDEXING_ENABLED=false`, Then every page is `noindex` and robots disallow all.
+- Given `true`, Then only `/{slug}` is indexable with title, description, canonical and OG image; results, form, confirmation, 404, unavailable, admin and system pages stay `noindex`.
 
 ### EP-05 Vehicles and expenses (§7.2)
 
@@ -583,7 +594,7 @@ M1 platform + auth + systemadmin + tenants/subscriptions (AC1, AC2) · M2 vehicl
 | FR-MAIL-03 | Tenant without SMTP: no tenant emails; persistent admin warning; booking flow unaffected. | M | gap |
 | FR-MAIL-04 | Delivery result (sent/failed + error summary, no secrets) recorded per email; visible to the admin for bookings and operators; resend available. | S | gap |
 | FR-MAIL-05 | Email sending never blocks or fails a booking; bounded by timeout; must work in a serverless request or via a job adapter. | M | NFR-SRV-01 |
-| FR-MAIL-06 | Emails never contain passwords or secrets; the only credential-like content is a single-use, expiring link (FR-AUTH-11). | M | §4 |
+| FR-MAIL-06 | Emails never contain passwords or secrets; the only credential-like content is a single-use, expiring link (FR-AUTH-11). Credential emails (activation, reset) are never stored (no body persisted in the email log) and never retried automatically; the creator or user re-issues them manually. | M | §4 |
 | FR-MAIL-07 | **New-booking notification (REQ-14)**: on each new public booking an email goes to the tenant admin's address with code, vehicle, dates, customer name and phone, total. On by default; the admin can switch it off in settings. Failure does not affect the booking. | M | REQ-14 |
 | FR-PDF-01 | Server-side PDF booking summary: code, vehicle, dates (tenant time zone), customer, daily price, billed days, total, payment note (pay on site), tenant branding, and the line "This document is a booking summary, not an invoice or receipt" (REQ-13). | M | §2, §6.4 |
 | FR-PDF-02 | Generated on demand from stored data (screen download, email, admin re-download); after an edit the regenerated PDF reflects the current data (A-30). | M | §6.4 |
@@ -704,7 +715,7 @@ M1 platform + auth + systemadmin + tenants/subscriptions (AC1, AC2) · M2 vehicl
 | NFR-SEC-04 | Security | Session cookies HttpOnly, Secure (non-local), SameSite Lax or stricter; CSRF protection; security headers (CSP, HSTS, X-Content-Type-Options, frame-ancestors none, referrer policy). | Automated header test |
 | NFR-SEC-05 | Security | Rate limiting on login, password reset, search (5/min/IP) and public booking (10/h/IP); store must work without in-memory per-instance state (serverless). | Test |
 | NFR-SEC-06 | Security | Uploads: content-type allowlist verified by magic bytes, size limits, randomised keys, no SVG. | Test |
-| NFR-SEC-07 | Security | Booking codes >= 40 bits of entropy, reset tokens >= 128 bits, tokens stored hashed. | Review |
+| NFR-SEC-07 | Security | Booking codes 50 bits of entropy (A-12), reset tokens >= 128 bits, tokens stored hashed. | Review |
 | NFR-SEC-09 | Security | Outbound SMTP connections are made only to hosts that pass the SSRF guard (FR-BRD-06); the guard is re-checked at connect time (resolved IP), not only at save time. No card numbers or identity documents are stored (FR-DAT-01). | Test |
 | NFR-SEC-08 | Security | Dependency and secret scanning in CI; no known critical/high vulnerability at release. | CI |
 | NFR-GDPR-01 | Privacy | Each tenant is controller of its customers' data; the platform is processor (discovery D15). The owner provides a data-processing agreement (DPA) and a privacy-notice template; the tenant supplies its own notice and rental terms (REQ-12). A signed DPA and a configured notice are prerequisites for a tenant going live. | Legal review, go-live checklist |
@@ -715,8 +726,8 @@ M1 platform + auth + systemadmin + tenants/subscriptions (AC1, AC2) · M2 vehicl
 | NFR-GDPR-06 | Privacy | Retention (REQ-12): customer personal data kept until the tenant anonymises it; a yearly reminder (FR-CUS-09) prompts review; no automatic deletion. Audit log 24 months; logs without PII <= 30 days. | Review |
 | NFR-GDPR-07 | Privacy | No non-essential cookies/trackers; only a strictly necessary session cookie for logged-in users; no cookie banner. | Test |
 | NFR-A11Y-01 | Accessibility | WCAG 2.2 AA on public flow and admin (EAA): keyboard operable, visible focus, landmarks/labels, error identification, target size, AA contrast with any tenant palette (FR-BRD-04), reduced-motion respected. | axe in Playwright + manual keyboard/screen-reader pass |
-| NFR-A11Y-02 | Accessibility | The calendar grid is keyboard usable and has a non-visual equivalent (agenda list per day). | Manual test |
-| NFR-PERF-01 | Performance | Public pages: LCP <= 2.5 s, CLS <= 0.1, INP <= 200 ms at p75 on simulated mobile 4G with 30 vehicles; images resized (max 1280 px; cards ~480 px), lazy-loaded. | Lighthouse CI |
+| NFR-A11Y-02 | Accessibility | The calendar grid is keyboard usable and has a non-visual equivalent: the Agenda view (FR-CAL-02), reachable from the view switcher and fully keyboard and screen-reader operable. | Manual test + axe |
+| NFR-PERF-01 | Performance | Public pages: LCP <= 2.5 s, CLS <= 0.1, INP <= 200 ms, TTFB <= 800 ms at p75 on simulated mobile 4G with 30 vehicles; JavaScript on the public root page `/{slug}` <= 150 kB gzip; images resized (max 1280 px; cards ~480 px), lazy-loaded. | Lighthouse CI |
 | NFR-PERF-02 | Performance | Availability search with 50 vehicles and 5,000 bookings: p95 <= 500 ms server time at 20 concurrent users. | Load test |
 | NFR-PERF-03 | Performance | Booking create/edit p95 <= 800 ms (excluding email/PDF; total response with email attempt <= 3 s via timeout). | Load test |
 | NFR-PERF-04 | Performance | Calendar month for 50 vehicles x 31 days: <= 1.5 s p95 server + <= 2 s client on mid-range phone; admin lists paginated (default 25). | Test |
@@ -744,7 +755,7 @@ M1 platform + auth + systemadmin + tenants/subscriptions (AC1, AC2) · M2 vehicl
 Spec entities: Tenant, Subscription, User, Vehicle, VehiclePhoto, Expense, Customer, Booking, RevenueYearSnapshot (with spec indexes).
 
 Additional data implied (for the database-architect):
-- Tenant: time zone, currency, contact info, accent/background/text colors, font, theme mode, logo alt text, privacy notice and rental terms (link or text), booking rules (min/max days, lead time, buffer), new-booking email toggle.
+- Tenant: country code, `dpa_signed_at`, short description, structured address (all-or-none), time zone, currency, contact info, accent/background/text colors, font, theme mode, logo alt text, privacy notice and rental terms (link or text), booking rules (min/max days, lead time, buffer), new-booking email toggle.
 - Vehicle: archived flag, maintenance flag, photo order/cover (stored status only available/maintenance).
 - Booking: `source`, customer name snapshot, `paidAmount`, cancelledAt/reason, billed days, created timestamp; `endAt` is the effective return moment and the revenue attribution date.
 - Customer: normalised phone, anonymisedAt.
@@ -816,7 +827,7 @@ Greenfield: no data to migrate. Dev seed of one systemadmin; production bootstra
 | A-9 | In read-only the admin may still record payments and update the status of existing bookings (automatic transitions, manual active/completed, and cancellation), and export CSV; creating or editing bookings (dates/vehicle), vehicles, expenses, operators and settings is blocked. Rationale: lets a tenant close out rentals already agreed with customers while renewing. |
 | A-10 | A missing or failing SMTP never blocks core actions; failures are logged and visible to the admin. Reminders addressed to a tenant admin whose tenant has no SMTP are sent through the system SMTP. |
 | A-11 | Calendar-day rule details: the return instant is exclusive, so a return at exactly 00:00 does not touch that day; min/max duration are measured in billed days; lead time and buffer in minutes; time inputs in 15-minute steps; "now" pickup is rounded up to the next 15 minutes. |
-| A-12 | Booking code: 8 characters, uppercase letters and digits excluding ambiguous ones (0/O, 1/I/L), shown as `XXXX-XXXX`, random, globally unique, not sequential. |
+| A-12 | Booking code: 10 characters of Crockford base32 (50 bits of randomness), generated randomly, unique per tenant, not sequential; input is case-insensitive and tolerant of Crockford look-alike characters. |
 | A-13 | The systemadmin console shows tenant and subscription data and audit events of those, never customers or bookings. |
 | A-14 | Tenant currency (ISO 4217, default EUR) governs prices, expenses and revenue; the subscription currency is independent. Currency and time zone are locked once a vehicle or booking exists (changes done manually by the owner). |
 | A-15 | No self-service tenant deletion in the UI (suspend only); termination, export and hard deletion after 90 days is the systemadmin procedure of FR-SYS-16 (SEC-7). |
@@ -844,6 +855,8 @@ Greenfield: no data to migrate. Dev seed of one systemadmin; production bootstra
 | A-37 | The yearly privacy reminder uses a fixed threshold of 24 months without booking, sent in the first week of January. |
 | A-38 | CSV exports are capped at 50,000 rows per file (larger sets: narrow the filter). |
 | A-39 | Replacing the tenant admin keeps the old admin's audit history under the old (now inactive) username. |
+| A-40 | **Pending GATE 3.** Each tenant has a required `country_code` (ISO 3166-1, default IT) used as the default region for phone normalisation (FR-CUS-03) and for display. |
+| A-41 | **Pending GATE 3.** Onboarding of a tenant requires the systemadmin to tick "DPA signed", stored as `dpa_signed_at`; a tenant without it cannot be set live (supports NFR-GDPR-01). |
 
 ### 9.3 Risks
 | ID | Risk | Severity | Mitigation |
@@ -941,6 +954,6 @@ Local Docker then Vercel + external Postgres: NFR-SRV-01, FR-PLT-05 · scale: NF
 
 ### 11.5 Priority summary (MoSCoW)
 - Must: all requirements marked M (core of AC1..AC11, plus the user-approved extras: FR-SYS-14, FR-SYS-15, FR-MAIL-07, EP-14, FR-BKG-16/17).
-- Should: FR-SYS-10, FR-PUB-14, FR-CAL-06, FR-CAL-10, FR-CUS-04, FR-OPR-03, FR-BKG-15, FR-BKG-19, FR-MAIL-04, FR-BRD-10, FR-REV-12, US-072.
+- Should: FR-SYS-10, FR-CAL-06, FR-CAL-10, FR-CUS-04, FR-OPR-03, FR-BKG-15, FR-BKG-19, FR-MAIL-04, FR-BRD-10, FR-REV-12, US-072.
 - Could: FR-CAL-09, FR-CUS-05, FR-REV-08, FR-REV-13.
 - Won't (this version): FR-VEH-12 and everything in section 3.3.
