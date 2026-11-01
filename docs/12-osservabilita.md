@@ -27,7 +27,7 @@ Regola linguistica: codice, nomi di evento, campi, variabili d'ambiente e messag
 
 | File (percorso pianificato) | Responsabilita |
 |---|---|
-| `platform/logging/logger.ts` | Factory pino. Opzioni: `level` da `OBS_LOG_LEVEL`, `timestamp: pino.stdTimeFunctions.isoTime` (UTC), `messageKey: 'message'`, `base: { service, env, version }`, `formatters.level` -> stringa, `mixin()` che legge il contesto di richiesta, `formatters.log()` che applica l'allowlist, `redact` come seconda difesa, `serializers.err` custom (2.4). |
+| `platform/logging/logger.ts` | Factory pino. Opzioni: `level` da `OBS_LOG_LEVEL`, `timestamp: () => ',"ts":"' + new Date().toISOString() + '"'` (campo `ts`, ISO 8601 UTC, via `Clock` iniettato nei test), `messageKey: 'message'`, `base: { service, env, version }`, `formatters.level` -> stringa, `mixin()` che legge il contesto di richiesta, `formatters.log()` che applica l'allowlist, `redact` come seconda difesa, `serializers.err` custom (2.4). |
 | `platform/logging/context.ts` | `AsyncLocalStorage<RequestContext>`: `runWithContext(ctx, fn)`, `getContext()`, `withContext(patch, fn)` (figlio con `tenant_id` aggiunto, usato dai job per tenant), `captureContext()` per `after()`. |
 | `platform/logging/fields.ts` | Tipo `LogFields` chiuso e array `ALLOWED_FIELDS`. E la fonte unica per tipo, filtro runtime e test. |
 | `platform/logging/redaction.ts` | Lista dei path di redazione e funzione `scrubString` usata anche dall'adapter Sentry. |
@@ -64,11 +64,11 @@ interface Logger {
 
 ### 2.3 Campi di ogni riga
 
-Obbligatori (da base/mixin): `timestamp` (ISO 8601 UTC), `level`, `message`, `event`, `service` (`rentcar`), `env` (`APP_ENV`), `version` (SHA/tag di build iniettato a build time), `request_id`, `realm` (`tenant|system|public|job`).
+Obbligatori (da base/mixin): `ts` (ISO 8601 UTC, nome di SR-LOG-01), `level`, `message`, `event`, `service` (`rentcar`), `env` (`APP_ENV`), `version` (SHA/tag di build iniettato a build time), `request_id`, `realm` (`tenant|system|public|job`).
 Quando noti: `tenant_id`, `actor_id` (uuid interno di staff, mai un nome o email), `route_template`, `status`, `duration_ms`, `outcome`, `reason_code`, `error_code`, `ip_prefix`, `ip_hmac`.
 Riservati per OTel (oggi assenti): `trace_id`, `span_id`, popolati da `mixin` solo se `OBS_OTEL_ENABLED=true`.
 
-Allineamento ai nomi di SR-LOG-01: `ts` in SR-LOG-01 e `timestamp` qui; si accetta `timestamp` (standard dello skill) e il test verifica la presenza di uno dei due. **Proposta al security-engineer**: aggiornare SR-LOG-01 a `timestamp` (nessun impatto funzionale).
+Allineamento a SR-LOG-01: il campo orario si chiama `ts` (decisione del coordinatore, salvo modifica del security-engineer). Il nome `timestamp` usato nella versione 1.0 di questo documento e superato.
 
 ### 2.4 Allowlist, redazione, errori
 
@@ -281,13 +281,13 @@ Percorso: `/system/status` (console, ruolo systemadmin, `Cache-Control: no-store
 | Sezione | Contenuto | Query / fonte |
 |---|---|---|
 | A. Job | Per job: ultimo successo, eta, stato rispetto a `maxAgeMinutes`, ultimo fallimento con `error`, tentativi | Q1 |
-| B. Email | Ultimi 7/30 giorni: totale, `sent`, `failed`, `abandoned`, tasso di consegna; per template; mail di credenziali `failed` non rinnovate | Q2 |
+| B. Email | Ultimi 7/30 giorni: totale, `sent`, `failed`, `abandoned`, tasso di consegna; per template; mail di credenziali non consegnate | Q2 / Q2b (funzioni `platform_email_health`, `platform_undelivered_credentials`) |
 | C. Prenotazioni | Per tenant, mese corrente e precedente: create, completate | `platform_kpis(p_from, p_to)` (esiste, definer, richiede scope `system`) |
 | D. Sicurezza (sola lettura, per CSM-1) | Ultime 24 h per evento: `auth.login.failure`, `ratelimit.exceeded`, `access.denied`, `job.auth_failed`, `crypto.decrypt_failed`; ultimo `auth.login.success` del systemadmin | Q3 |
 | E. Tenant | Conteggio per stato (`active`, `suspended`, `terminated`); abbonamenti in scadenza entro 14 giorni | su `tenants`, `subscriptions` |
 | F. Versione | `version` di build, `APP_ENV`, stato `readyz` interno | codice |
 
-Query indicative (nomi di colonna da `05-database.md`; il backend le implementa come funzioni definer o viste in scope `system`; **la lettura cross-tenant di `job_runs` e `email_log` per lo scope `system` va verificata nella matrice 4.5 del database-architect**, domanda di coordinamento in Esito):
+Query indicative (nomi di colonna da `05-database.md`; il backend le implementa come funzioni definer o viste in scope `system`; `job_runs` e leggibile cross-tenant dallo scope `system` (query dirette Q1/Q1b); `email_log` no: Q2/Q2b usano `platform_email_health(p_since)` e `platform_undelivered_credentials(p_since)` (`docs/05-database.md` v1.1, 4.6)):
 
 ```sql
 -- Q1 job freshness (registry rows are passed in as a VALUES list from code: job, max_age_minutes)
@@ -306,16 +306,16 @@ FROM job_runs
 WHERE status = 'failed' AND finished_at > now() - interval '30 days';   -- the unique index keeps one row per key,
                                                                         -- a retry that succeeds updates the same row
 
--- Q2 email delivery (no recipient column is read)
-SELECT category, template, status, count(*)
-FROM email_log
-WHERE created_at > now() - interval '30 days'
-GROUP BY category, template, status;
--- delivery rate: sent / nullif(sent + failed + abandoned, 0) for category = 'transactional'
+-- Q2 email delivery: scope 'system' has NO row access to email_log (docs/05-database.md v1.1, 4.5/4.6).
+-- Use the aggregate definer function (requires app_scope() = 'system'; no recipient, no tenant id):
+SELECT category, template, status, count
+FROM platform_email_health($1::timestamptz);          -- $1 = now() - interval '30 days'
+-- delivery rate computed by the caller on category = 'transactional':
+--   sent / nullif(sent + failed + abandoned, 0)
 
--- Q2b credential mails not delivered
-SELECT tenant_id, related_id, last_attempt_at FROM email_log
-WHERE category = 'credential' AND status IN ('failed','abandoned') AND created_at > now() - interval '14 days';
+-- Q2b credential mails not delivered (activation not delivered; the admin re-issues the link)
+SELECT tenant_id, related_id, last_attempt_at
+FROM platform_undelivered_credentials($1::timestamptz);   -- $1 = now() - interval '14 days'
 
 -- Q3 security signals (last 24 h)
 SELECT event, outcome, count(*) FROM security_event
@@ -405,5 +405,5 @@ Valutazione: costo 0 EUR, sforzo stimato ~1-2 giorni di sviluppo per heartbeat +
 - **backend-developer**: implementare `platform/logging`, `platform/error-reporter`, `platform/http` (contesto, `afterWithContext`), registro eventi, `/api/healthz`, `/api/readyz`, `onRequestError`; allineare `OBS_*` e il nome `ERROR_REPORTER`; registro job con `cadence` e `maxAgeMinutes`; le funzioni/viste della sezione 9.
 - **devops-engineer**: rotazione log nel Compose, healthcheck su `healthz`, `depends_on` migrate, variabili `OBS_*` e DSN come segreto, retention log dell'host, pinger esterno se CSM-1 approvata, `nightly-backup.yml` con notifica di fallimento, secret `OBS_HEARTBEAT_URL` opzionale.
 - **qa-engineer**: sezione 11 come piano; `CapturingLogSink` e `capturing` reporter nel test container; il canary test e gate di merge dal M0.
-- **database-architect**: confermare che lo scope `system` legge `job_runs` e `email_log` cross-tenant (altrimenti due funzioni definer in sola lettura, sul modello di `platform_kpis`, con la stessa regola di privilegi); `job_runs.error` e `email_log.last_error` solo codici.
-- **security-engineer**: confermare lista di redazione (2.4), `timestamp` al posto di `ts` in SR-LOG-01, `system.context.used` in log solo a debug, wording del sub-responsabile.
+- **database-architect**: gia recepito in `05-database.md` v1.1 (`job_runs` leggibile, `email_log` solo via funzioni aggregate); `job_runs.error` e `email_log.last_error` solo codici.
+- **security-engineer**: confermare lista di redazione (2.4), `system.context.used` in log solo a debug, wording del sub-responsabile.
