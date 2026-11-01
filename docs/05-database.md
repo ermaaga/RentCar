@@ -1,84 +1,84 @@
-# Database: RentCar (modello dati, sicurezza, migrazioni, backup)
+# Database: RentCar (data model, security, migrations, backup)
 
-Versione 1.0 · 2026-11-01 · Autore: database-architect · Fase 4, onda A (solo analisi, nessuna migrazione scritta)
-Input letti: `docs/03b-struttura-codice.md`, `docs/03-architettura.md`, ADR-0002/0003/0004/0005/0007/0008/0010/0013/0014, `docs/02-requisiti.md` v1.2, `docs/spec/car-rental-spec.md` §9, `docs/03-inputs/security-constraints.md`, `docs/security/sign-off.md`, piu i messaggi del coordinatore (campi tenant: `shortDescription`, indirizzo strutturato, titolo max 45, chiave immagine Open Graph, `countryCode`, `dpaSignedAt`) e `docs/04a-ux.md` / `docs/09-seo.md` solo per questi campi. Allineato a `docs/08-security.md` (requisiti `SR-*`, sezione 0.1).
-Lingua: documento in italiano; nomi di tabelle, colonne, policy, ruoli e SQL in inglese.
+Version 1.0 · 2026-11-01 · Author: database-architect · Phase 4, wave A (analysis only, no migrations written)
+Inputs read: `docs/03b-struttura-codice.md`, `docs/03-architettura.md`, ADR-0002/0003/0004/0005/0007/0008/0010/0013/0014, `docs/02-requisiti.md` v1.2, `docs/spec/car-rental-spec.md` §9, `docs/03-inputs/security-constraints.md`, `docs/security/sign-off.md`, plus the coordinator's messages (tenant fields: `shortDescription`, structured address, title max 45, Open Graph image key, `countryCode`, `dpaSignedAt`) and `docs/04a-ux.md` / `docs/09-seo.md` only for those fields. Aligned with `docs/08-security.md` (`SR-*` requirements, section 0.1).
+Language: English (user decision 2026-11-01: all documentation in `docs/` is in English); table, column, policy and role names and SQL are in English. Questions to the user are in Italian (user request).
 
-Verifica sperimentale: le affermazioni marcate **[V]** sono state eseguite su PostgreSQL 16.15 (container `postgres:16`, 2026-11-01); le marcate **[NV]** non sono verificate e hanno un controllo associato (sezione 15).
+Experimental verification: statements marked **[V]** were executed on PostgreSQL 16.15 (container `postgres:16`, 2026-11-01); statements marked **[NV]** are not verified and have an associated check (section 15).
 
 ---
 
-## 0. Sintesi delle decisioni
+## 0. Summary of decisions
 
-1. PostgreSQL 16 confermato (relazionale, un solo motore). Provider di produzione ancora agnostico (ADR-0010 resta "proposta"); sezione 1 fissa i requisiti minimi che qualunque provider deve soddisfare.
-2. 22 tabelle (18 di dominio/operative + `security_event`, `platform_audit`, `slug_tombstone`, `deletion_ledger` richieste da 08-security). Ogni tabella con dati di tenant ha `tenant_id`, `ENABLE` + `FORCE ROW LEVEL SECURITY`, una policy `tenant_isolation`, e FK **composite** `(tenant_id, x_id)` verso il padre, cosi un record non puo mai puntare a una riga di un altro tenant nemmeno con RLS aggirata [V].
-3. **TD-4 risolto** (sezione 4): i percorsi senza tenant usano `withSystem(actor)` che imposta `app.scope` (`resolve | system_auth | system | job | bootstrap`, allineato a SR-DB-05 e ad ADR-0003), non un unico "system". Ogni tipo vede solo le tabelle/comandi della matrice 4.5. La risoluzione dello slug (percorso pubblico piu frequente) puo leggere **solo** `tenants` (SR-DB-05).
-4. Le policy usano `NULLIF(current_setting(..., true), '')::uuid`: **la forma di ADR-0003 senza `NULLIF` fallisce** con `invalid input syntax for type uuid: ""` su una connessione di pool riusata dopo una transazione [V].
-5. Doppia prenotazione: `EXCLUDE USING gist (vehicle_id WITH =, blocked_during WITH &&) WHERE (status <> 'cancelled')` con `blocked_during` mantenuto da trigger [V: buffer 60 min, 10:30 in conflitto, 11:00 libero; 60 insert paralleli = 1 vincitore]. In piu un advisory lock transazionale per veicolo per evitare deadlock (sezione 6).
-6. Audit log append-only a livello DB: solo `INSERT/SELECT` al ruolo runtime, nessuna policy di UPDATE/DELETE, trigger che blocca UPDATE/DELETE anche al proprietario [V]. Cancellazioni (retention 24 mesi, eliminazione tenant) solo tramite due funzioni `SECURITY DEFINER`.
-7. Eliminazione hard del tenant a 90 giorni: funzione generica `purge_tenant_data(uuid)` che ordina le tabelle dal grafo delle FK [V: 4 righe cancellate, altro tenant intatto], lascia solo la riga "tombstone" in `tenants`.
-8. Migrazioni: `drizzle-kit generate` + migrazioni SQL custom per cio che Drizzle non modella; runner su `DIRECT_DATABASE_URL`; forward-only con script di rollback separati per le migrazioni di espansione; ruoli creati da uno script di bootstrap (non da Drizzle).
-9. Backup: `pg_dump -Fc --enable-row-security` con ruolo read-only dedicato (BYPASSRLS dove il provider lo consente, SR-DB-01; altrimenti policy `backup_read`, equivalente [V]), confronto dei conteggi di riga nel test di restore (SR-DB-09), cifrato con `age`, 30 giorni; restore come proprietario su tabelle con FORCE RLS **funziona** [V].
-10. Allineamento a 08-security: codice prenotazione di 10 caratteri Crockford (50 bit, SR-VAL-09), unico per tenant; email di credenziali mai salvate ne ritentate (SR-EML-02); registro delle cancellazioni da rieseguire dopo ogni restore (SR-GDPR-08); funzione di eliminazione tenant protetta (SR-GDPR-07); retention `security_event` 12 mesi e destinatario email azzerato a 90 giorni (SR-GDPR-05); IP solo come prefisso + HMAC (SR-LOG-03).
-11. Snapshot annuali versionati e append-only (nessun UPDATE/DELETE concesso); riconciliazione notturna come rete di sicurezza.
+1. PostgreSQL 16 confirmed (relational, a single engine). The production provider is still agnostic (ADR-0010 stays "proposed"); section 1 sets the minimum requirements any provider must meet.
+2. 22 tables (18 domain/operational + `security_event`, `platform_audit`, `slug_tombstone`, `deletion_ledger` required by 08-security). Every table holding tenant data has `tenant_id`, `ENABLE` + `FORCE ROW LEVEL SECURITY`, a `tenant_isolation` policy, and **composite** FKs `(tenant_id, x_id)` to the parent, so a record can never point to a row of another tenant even with RLS bypassed [V].
+3. **TD-4 resolved** (section 4): tenant-less paths use `withSystem(actor)`, which sets `app.scope` (`resolve | system_auth | system | job | bootstrap`, aligned with SR-DB-05 and ADR-0003), not a single "system". Each scope sees only the tables/commands of matrix 4.5. Slug resolution (the most frequent public path) can read **only** `tenants` (SR-DB-05).
+4. Policies use `NULLIF(current_setting(..., true), '')::uuid`: **the ADR-0003 form without `NULLIF` fails** with `invalid input syntax for type uuid: ""` on a pooled connection reused after a transaction [V].
+5. Double booking: `EXCLUDE USING gist (vehicle_id WITH =, blocked_during WITH &&) WHERE (status <> 'cancelled')` with `blocked_during` maintained by a trigger [V: 60-minute buffer, 10:30 conflicts, 11:00 free; 60 parallel inserts = 1 winner]. Plus a per-vehicle transactional advisory lock to avoid deadlocks (section 6).
+6. Append-only audit log at DB level: only `INSERT/SELECT` for the runtime role, no UPDATE/DELETE policy, a trigger that blocks UPDATE/DELETE even for the owner [V]. Deletions (24-month retention, tenant deletion) only through `SECURITY DEFINER` functions.
+7. Hard delete of a tenant at 90 days: generic function `purge_tenant_data(uuid)` that orders tables from the FK graph [V: 4 rows deleted, other tenant intact], leaving only the "tombstone" row in `tenants`.
+8. Migrations: `drizzle-kit generate` + custom SQL migrations for what Drizzle does not model; runner on `DIRECT_DATABASE_URL`; forward-only with separate rollback scripts for expand migrations; roles created by a bootstrap script (not by Drizzle).
+9. Backup: `pg_dump -Fc --enable-row-security` with a dedicated read-only role (BYPASSRLS where the provider allows it, SR-DB-01; otherwise `backup_read` policy, equivalent [V]), row-count comparison in the restore test (SR-DB-09), encrypted with `age`, 30 days; restore as owner on tables with FORCE RLS **works** [V].
+10. Alignment with 08-security: booking code of 10 Crockford characters (50 bit, SR-VAL-09), unique per tenant; credential emails never stored nor retried (SR-EML-02); deletion ledger replayed after every restore (SR-GDPR-08); guarded tenant deletion function (SR-GDPR-07); `security_event` retention 12 months and email recipient nulled at 90 days (SR-GDPR-05); IPs only as prefix + HMAC (SR-LOG-03).
+11. Versioned, append-only yearly snapshots (no UPDATE/DELETE granted); nightly reconciliation as a safety net.
 
-### 0.1 Allineamento a `docs/08-security.md` (requisiti SR-* che toccano il database)
+### 0.1 Alignment with `docs/08-security.md` (SR-* requirements that touch the database)
 
-| SR | Requisito (sintesi) | Dove e recepito | Note / scostamenti |
+| SR | Requirement (summary) | Where covered | Notes / deviations |
 |---|---|---|---|
-| SR-DB-01 | ruoli creati da SQL: owner, migrator, app, backup | 4.1 | owner `NOLOGIN`, `rentcar_migrator` fa `SET ROLE rentcar_owner` (SET ROLE e proprieta degli oggetti da verificare in M1, NV7) |
-| SR-DB-02 | `FORCE RLS`, policy con `nullif(current_setting('app.tenant_id', true), '')::uuid` | 4.2, 4.3 | provato [V]: senza `NULLIF` errore su connessione riusata |
-| SR-DB-03 | `withTenant`: `set_config('app.tenant_id', ..., true)` + `app.scope='tenant'`, `release(true)` se il ROLLBACK fallisce | 4.2 | |
-| SR-DB-04 | test di catalogo e spike S1 | 8.1, 12 | |
-| SR-DB-05 | scope `tenant`, `resolve`, `job`, `system`; nessuna policy di sistema su clienti/prenotazioni/veicoli/spese/snapshot/media | 4.5 | aggiunti `system_auth` (login systemadmin) e `bootstrap` (CLI) |
-| SR-DB-06 | grant espliciti, tabelle append-only INSERT/SELECT, `EXECUTE` solo alle funzioni di retention/hard delete | 4.4 | |
-| SR-DB-07 | timeout di ruolo 10 s / 3 s / 15 s | 4.1 | |
-| SR-DB-08 | TLS `verify-full`, DB solo su 127.0.0.1 in compose | 1, 8.1 | |
-| SR-DB-09 | dump con `rentcar_backup`, `age`, 30 giorni, restore con confronto conteggi e replay del registro | 10 | BYPASSRLS richiesto da SR-DB-01: recepito dove consentito, policy `backup_read` come alternativa portabile gia verificata |
-| SR-DB-10 | migrazioni SQL riviste, advisory lock, seed solo dev | 8 | |
-| SR-AUD-01..05 | tre archivi append-only (`audit_log`, `platform_audit`, `security_event`), immutabilita a livello DB, valori senza PII, retention 24 mesi / 12 mesi / 6 anni | 5.14, 5.19, 5.20 | trigger piu severo di SR-AUD-03: richiede `current_user = rentcar_owner` **e** GUC di retention |
-| SR-LOG-03 | `security_event` con IP solo prefisso + HMAC, retention 12 mesi | 5.19 | |
-| SR-SES-01/06/07 | hash SHA-256, user agent coarse, revoca = DELETE della riga, `last_seen` max 1/min | 5.6 | |
-| SR-AUT-04 | consumo atomico del token su POST | 5.7 | |
-| SR-EML-02/06 | email di credenziali non salvate ne ritentate; destinatario azzerato dopo 90 giorni | 5.15 | |
-| SR-GDPR-04 | anonimizzazione incl. snapshot su prenotazioni e destinatari in `email_log` | 5.12, 9.3 | aggiunto `bookings.customer_email` come snapshot |
-| SR-GDPR-05 | retention: sessioni 7 g, token 7 g, rate-limit <= 24 h, chiavi idempotenza 48 h, email log 12 mesi con destinatario azzerato a 90 g, `job_run` 12 mesi | 9.2 | sostituisce la mia stima precedente (90 g / 180 g) |
-| SR-GDPR-07 | eliminazione hard con funzione `SECURITY DEFINER`, tombstone slug 12 mesi, riga in `platform_audit` e nel registro | 9.3, 5.20-5.22 | |
-| SR-GDPR-08 | registro delle cancellazioni, replay obbligatorio dopo ogni restore | 5.22, 9.3, 10 | |
-| SR-RL-03 | chiavi rate-limit = HMAC, righe <= 24 h | 5.17 | |
-| SR-ACC-07 | slug ASCII, riservati, immutabile, tombstone 12 mesi | 5.1, 5.21 | |
-| SR-VAL-09 / PB-04 / decisione 5.8 | codice prenotazione `^[0-9A-HJKMNP-TV-Z]{10}$` (50 bit), unico per tenant | 5.12, 6.2 | **cambia A-12** (8 caratteri, 31 simboli) |
-| SR-PDF-02 | lookup per (slug, codice) nel tenant | 5.12, 7.6 | |
-| SR-JOB-03 | idempotenza `(job, tenant, period)` + `pg_try_advisory_xact_lock` | 5.16 | |
-| SR-CRY-01/03 | formato `v1.<kid>.<nonce>.<ct+tag>`, AAD `rc:v1:smtp_password:{tenantId}` | 5.3 | |
-| SR-CFG-02 | l'avvio rifiuta un ruolo runtime superuser/owner/BYPASSRLS (una query) | 4.1 | |
+| SR-DB-01 | roles created by SQL: owner, migrator, app, backup | 4.1 | owner `NOLOGIN`, `rentcar_migrator` does `SET ROLE rentcar_owner` (SET ROLE and object ownership to be verified in M1, NV7) |
+| SR-DB-02 | `FORCE RLS`, policy with `nullif(current_setting('app.tenant_id', true), '')::uuid` | 4.2, 4.3 | proven [V]: without `NULLIF` an error on a reused connection |
+| SR-DB-03 | `withTenant`: `set_config('app.tenant_id', ..., true)` + `app.scope='tenant'`, `release(true)` if ROLLBACK fails | 4.2 | |
+| SR-DB-04 | catalog tests and spike S1 | 8.1, 12 | |
+| SR-DB-05 | scopes `tenant`, `resolve`, `job`, `system`; no system policy on customers/bookings/vehicles/expenses/snapshots/media | 4.5 | added `system_auth` (systemadmin login) and `bootstrap` (CLI) |
+| SR-DB-06 | explicit grants, append-only tables INSERT/SELECT, `EXECUTE` only on retention/hard-delete functions | 4.4 | |
+| SR-DB-07 | role timeouts 10 s / 3 s / 15 s | 4.1 | |
+| SR-DB-08 | TLS `verify-full`, DB only on 127.0.0.1 in compose | 1, 8.1 | |
+| SR-DB-09 | dump with `rentcar_backup`, `age`, 30 days, restore with count comparison and ledger replay | 10 | BYPASSRLS required by SR-DB-01: adopted where allowed, `backup_read` policy as a portable alternative already verified |
+| SR-DB-10 | reviewed SQL migrations, advisory lock, dev-only seeds | 8 | |
+| SR-AUD-01..05 | three append-only stores (`audit_log`, `platform_audit`, `security_event`), DB-level immutability, values without PII, retention 24 months / 12 months / 6 years | 5.14, 5.19, 5.20 | trigger stricter than SR-AUD-03: requires `current_user = rentcar_owner` **and** the retention GUC |
+| SR-LOG-03 | `security_event` with IP only as prefix + HMAC, retention 12 months | 5.19 | |
+| SR-SES-01/06/07 | SHA-256 hash, coarse user agent, revocation = row DELETE, `last_seen` max 1/min | 5.6 | |
+| SR-AUT-04 | atomic token consumption on POST | 5.7 | |
+| SR-EML-02/06 | credential emails not stored nor retried; recipient nulled after 90 days | 5.15 | |
+| SR-GDPR-04 | anonymisation incl. booking snapshots and recipients in `email_log` | 5.12, 9.3 | added `bookings.customer_email` as snapshot |
+| SR-GDPR-05 | retention: sessions 7 d, tokens 7 d, rate-limit <= 24 h, idempotency keys 48 h, email log 12 months with recipient nulled at 90 d, `job_run` 12 months | 9.2 | replaces my earlier estimate (90 d / 180 d) |
+| SR-GDPR-07 | hard delete with a `SECURITY DEFINER` function, slug tombstone 12 months, row in `platform_audit` and in the ledger | 9.3, 5.20-5.22 | |
+| SR-GDPR-08 | deletion ledger, mandatory replay after every restore | 5.22, 9.3, 10 | |
+| SR-RL-03 | rate-limit keys = HMAC, rows <= 24 h | 5.17 | |
+| SR-ACC-07 | ASCII slug, reserved, immutable, tombstone 12 months | 5.1, 5.21 | |
+| SR-VAL-09 / PB-04 / decision 5.8 | booking code `^[0-9A-HJKMNP-TV-Z]{10}$` (50 bit), unique per tenant | 5.12, 6.2 | **changes A-12** (8 characters, 31 symbols) |
+| SR-PDF-02 | lookup by (slug, code) within the tenant | 5.12, 7.6 | |
+| SR-JOB-03 | idempotency `(job, tenant, period)` + `pg_try_advisory_xact_lock` | 5.16 | |
+| SR-CRY-01/03 | format `v1.<kid>.<nonce>.<ct+tag>`, AAD `rc:v1:smtp_password:{tenantId}` | 5.3 | |
+| SR-CFG-02 | startup rejects a runtime role that is superuser/owner/BYPASSRLS (one query) | 4.1 | |
 
 ---
 
-## 1. Scelta del DB e hosting
+## 1. DB choice and hosting
 
-**Conferma**: PostgreSQL 16. Motivi verificabili: esclusione GiST con `tstzrange` (AC4/KPI-3) e RLS (ADR-0003) non esistono in MySQL/MariaDB o in store documentali; SQLite non copre pooling serverless ne RLS; un document store renderebbe i report ricavi (aggregazioni per mese nel fuso del tenant) piu complessi. Cache/Redis/search non servono (ADR-0013/0014); full text non richiesto (ricerche per nome/telefono su poche migliaia di righe per tenant: `ILIKE` con `tenant_id`, nessuna estensione).
+**Confirmation**: PostgreSQL 16. Verifiable reasons: GiST exclusion with `tstzrange` (AC4/KPI-3) and RLS (ADR-0003) do not exist in MySQL/MariaDB or document stores; SQLite covers neither serverless pooling nor RLS; a document store would make revenue reports (per-month aggregations in the tenant time zone) more complex. Cache/Redis/search are not needed (ADR-0013/0014); full text is not required (searches by name/phone over a few thousand rows per tenant: `ILIKE` with `tenant_id`, no extension).
 
-**Hosting (non rideciso qui)**: Neon Frankfurt Launch (raccomandato da ADR-0010), Supabase Pro, Postgres su VPS (opzione C). Costi e piani restano quelli di ADR-0010/`devops-costs.md` (Neon Launch stimato 5-15 USD/mese al lancio, 10-25 al mese 12). Il database e progettato per funzionare identico su tutti: variano solo `DATABASE_URL` / `DIRECT_DATABASE_URL`.
+**Hosting (not re-decided here)**: Neon Frankfurt Launch (recommended by ADR-0010), Supabase Pro, Postgres on a VPS (option C). Costs and plans remain those of ADR-0010/`devops-costs.md` (Neon Launch estimated 5-15 USD/month at launch, 10-25 at month 12). The database is designed to work identically on all of them: only `DATABASE_URL` / `DIRECT_DATABASE_URL` vary.
 
-**Requisiti minimi del provider** (checklist da verificare con lo spike S1 e in fase GATE 4, qualunque provider):
+**Minimum provider requirements** (checklist to verify with spike S1 and at GATE 4, for any provider):
 
-| # | Requisito | Perche |
+| # | Requirement | Why |
 |---|---|---|
-| P1 | PostgreSQL >= 15 (test in CI su 16; job notturno su 17) | usiamo `UNIQUE ... NULLS NOT DISTINCT` (15), `security_invoker` (15), `SET NULL (col)` non usato |
-| P2 | Estensione `btree_gist` installabile da un ruolo non superuser (estensione "trusted" da PG13) | esclusione prenotazioni [V: creata da ruolo proprietario non superuser] |
-| P3 | Possibilita di creare ruoli `NOSUPERUSER NOBYPASSRLS` e di usarli per l'app | RLS efficace; i ruoli di default di alcuni provider (Neon console, Supabase) possono bypassare RLS [NV, sign-off punto 5] |
-| P4 | Pooler in transaction mode, TLS `verify-full`, regione UE | ADR-0003/0010 |
-| P5 | `ALTER ROLE ... SET` (timeout) e `pg_dump` con ruolo non superuser | sezione 4.3 e 10 |
-| P6 | Backup/PITR del provider (Neon Launch 7 giorni) in aggiunta al dump notturno | NFR-BKP-01 |
+| P1 | PostgreSQL >= 15 (CI tests on 16; nightly job on 17) | we use `UNIQUE ... NULLS NOT DISTINCT` (15), `security_invoker` (15), `SET NULL (col)` not used |
+| P2 | `btree_gist` extension installable by a non-superuser role ("trusted" extension since PG13) | booking exclusion [V: created by a non-superuser owner role] |
+| P3 | Ability to create `NOSUPERUSER NOBYPASSRLS` roles and use them for the app | effective RLS; the default roles of some providers (Neon console, Supabase) may bypass RLS [NV, sign-off point 5] |
+| P4 | Transaction-mode pooler, TLS `verify-full`, EU region | ADR-0003/0010 |
+| P5 | `ALTER ROLE ... SET` (timeouts) and `pg_dump` with a non-superuser role | sections 4.3 and 10 |
+| P6 | Provider backup/PITR (Neon Launch 7 days) in addition to the nightly dump | NFR-BKP-01 |
 
-Se P3 non e soddisfatto la RLS e inutile: ricade nell'eccezione gia accettata in ADR-0003 (solo scoping + test), da far riaccettare all'utente.
+If P3 is not met, RLS is useless: we fall back to the exception already accepted in ADR-0003 (scoping + tests only), which must be re-accepted by the user.
 
 ---
 
-## 2. Modello concettuale e logico
+## 2. Conceptual and logical model
 
-### 2.1 Diagramma ER
+### 2.1 ER diagram
 
 ```mermaid
 erDiagram
@@ -107,69 +107,69 @@ erDiagram
   }
 ```
 
-`rate_limit_buckets` non ha relazioni (chiavi HMAC senza tenant in chiaro). `security_event`, `platform_audit`, `slug_tombstone` e `deletion_ledger` sono archivi di piattaforma: usano `subject_tenant_id` (senza FK, per sopravvivere all'eliminazione del tenant) e **non** hanno una colonna `tenant_id`, quindi la funzione di eliminazione (che scopre le tabelle dalla colonna `tenant_id`) non li tocca.
+`rate_limit_buckets` has no relations (HMAC keys without a plain tenant). `security_event`, `platform_audit`, `slug_tombstone` and `deletion_ledger` are platform archives: they use `subject_tenant_id` (no FK, to survive tenant deletion) and have **no** `tenant_id` column, so the deletion function (which discovers tables from the `tenant_id` column) does not touch them.
 
-### 2.2 Regole di integrita (cardinalita e vincoli di dominio)
+### 2.2 Integrity rules (cardinalities and domain constraints)
 
-| Regola | Dove e applicata |
+| Rule | Where enforced |
 |---|---|
-| Uno slug unico, immutabile, 3-40 caratteri | `UNIQUE` + `CHECK` + trigger `tenants_slug_immutable` |
-| Un solo admin attivo/in attesa per tenant (FR-SYS-15, REQ-16) | indice univoco parziale `users_one_admin_per_tenant` |
-| Username unico per tenant; systemadmin unico globale (A-1) | due indici univoci (tenant e `tenant_id IS NULL`) |
-| Una sola sottoscrizione non annullata per intervallo (A-6) | `EXCLUDE ... daterange(start_date,end_date,'[]')` |
-| Nessuna prenotazione non annullata sovrapposta per veicolo (FR-BKG-08) | esclusione GiST |
-| Prenotazione, veicolo, cliente sempre dello stesso tenant | FK composite |
-| Codice prenotazione unico per tenant (SR-PDF-02, decisione 5.8) | `UNIQUE (tenant_id, code)` |
-| Pagamento coerente: pagato implica metodo, non pagato implica importo 0 | `CHECK` |
-| Snapshot immutabile e versione n+1 senza buchi | solo `INSERT`, `UNIQUE (tenant_id, year, version)` |
-| Audit non modificabile | grant + policy + trigger |
-| Stato `expired` della sottoscrizione NON e salvato (e derivato, FR-SYS-07) | colonna `status` ammette solo `active`, `cancelled` |
+| A unique, immutable slug, 3-40 characters | `UNIQUE` + `CHECK` + trigger `tenants_slug_immutable` |
+| Only one active/pending admin per tenant (FR-SYS-15, REQ-16) | partial unique index `users_one_admin_per_tenant` |
+| Username unique per tenant; systemadmin unique globally (A-1) | two unique indexes (tenant and `tenant_id IS NULL`) |
+| Only one non-cancelled subscription per interval (A-6) | `EXCLUDE ... daterange(start_date,end_date,'[]')` |
+| No overlapping non-cancelled bookings per vehicle (FR-BKG-08) | GiST exclusion |
+| Booking, vehicle, customer always of the same tenant | composite FKs |
+| Booking code unique per tenant (SR-PDF-02, decision 5.8) | `UNIQUE (tenant_id, code)` |
+| Consistent payment: paid implies method, not paid implies amount 0 | `CHECK` |
+| Immutable snapshot and version n+1 with no gaps | `INSERT` only, `UNIQUE (tenant_id, year, version)` |
+| Non-modifiable audit | grant + policy + trigger |
+| Subscription `expired` state is NOT stored (it is derived, FR-SYS-07) | `status` column allows only `active`, `cancelled` |
 
 ---
 
-## 3. Convenzioni
+## 3. Conventions
 
-- Tabelle plurale `snake_case`, colonne `snake_case`; `id uuid` (UUIDv7 dall'`IdGenerator` applicativo; default `gen_random_uuid()` solo come rete per SQL manuale e seed); `tenant_id` subito dopo `id`. Eccezioni documentate: tabelle 1:1 (`tenant_settings`, `tenant_smtp_configs`) hanno `tenant_id` come PK; tabelle "miste" (`users`, `sessions`, `credential_tokens`, `audit_log`, `email_log`, `job_runs`) hanno `tenant_id` nullable per i record di piattaforma.
-- `created_at`, `updated_at` `timestamptz NOT NULL DEFAULT now()`; `updated_at` tenuto da trigger `set_updated_at()`.
-- Enum come `text` + `CHECK ... IN (...)` (non enum nativi): il migratore di Drizzle applica le migrazioni pendenti in una sola transazione [NV, da verificare in M1] e `ALTER TYPE ADD VALUE` ha limiti dentro una transazione; i `CHECK` si aggiornano con drop/add. Il tipo TS e l'unione corrispondente.
-- Importi: `bigint` in unita minori + `CHECK (x >= 0)` e tetto `< 10^12`; la valuta sta sul tenant (bloccata dopo il primo dato, A-14); gli snapshot salvano anche `currency`. Il driver `pg` restituisce `int8` come stringa: impostare `types.setTypeParser(20, Number)` (sicuro grazie al tetto) e `.mapWith(Number)` sulle aggregazioni.
-- FK: tutte con `ON DELETE` esplicito. Regola: verso `tenants` e tra tabelle di tenant `NO ACTION` (nessuna cancellazione a cascata silenziosa); `CASCADE` solo `vehicle_photos -> vehicles`.
-- Soft/hard delete: nessun `deleted_at` generico. Veicoli: `archived_at` (o delete se senza storico); clienti: anonimizzazione; utenti: `status='deactivated'`; prenotazioni: `status='cancelled'`; sottoscrizioni: `status='cancelled'`; spese: delete; tenant: tombstone.
-- Date/tempo: istanti in `timestamptz` (UTC); date di calendario pure (`expense_date`, `start_date`, `end_date`) in `date` nel fuso del tenant. **Attribuzione a mese/anno dei ricavi calcolata in SQL** con `AT TIME ZONE tenants.time_zone` (unica fonte: tzdata di Postgres); `shared/time` serve per input e visualizzazione.
-- Multilingua: lingua unica `en`, nessuna tabella di traduzioni (YAGNI). Quando arrivera una seconda lingua, i testi scritti dal tenant (privacy, termini, descrizione) richiederanno `tenant_content_translations (tenant_id, locale, ...)`: aggiunta in espansione, nessun impatto sullo schema attuale.
+- Plural `snake_case` tables, `snake_case` columns; `id uuid` (UUIDv7 from the application `IdGenerator`; default `gen_random_uuid()` only as a safety net for manual SQL and seeds); `tenant_id` right after `id`. Documented exceptions: 1:1 tables (`tenant_settings`, `tenant_smtp_configs`) have `tenant_id` as PK; "mixed" tables (`users`, `sessions`, `credential_tokens`, `audit_log`, `email_log`, `job_runs`) have a nullable `tenant_id` for platform records.
+- `created_at`, `updated_at` `timestamptz NOT NULL DEFAULT now()`; `updated_at` maintained by trigger `set_updated_at()`.
+- Enums as `text` + `CHECK ... IN (...)` (not native enums): the Drizzle migrator applies pending migrations in a single transaction [NV, to verify in M1] and `ALTER TYPE ADD VALUE` has limits inside a transaction; `CHECK`s are updated with drop/add. The TS type is the matching union.
+- Amounts: `bigint` in minor units + `CHECK (x >= 0)` and a cap `< 10^12`; the currency lives on the tenant (locked after the first data, A-14); snapshots also store `currency`. The `pg` driver returns `int8` as a string: set `types.setTypeParser(20, Number)` (safe thanks to the cap) and `.mapWith(Number)` on aggregations.
+- FKs: all with explicit `ON DELETE`. Rule: towards `tenants` and between tenant tables `NO ACTION` (no silent cascade deletion); `CASCADE` only `vehicle_photos -> vehicles`.
+- Soft/hard delete: no generic `deleted_at`. Vehicles: `archived_at` (or delete if no history); customers: anonymisation; users: `status='deactivated'`; bookings: `status='cancelled'`; subscriptions: `status='cancelled'`; expenses: delete; tenant: tombstone.
+- Date/time: instants in `timestamptz` (UTC); pure calendar dates (`expense_date`, `start_date`, `end_date`) in `date` in the tenant time zone. **Month/year attribution of revenue is computed in SQL** with `AT TIME ZONE tenants.time_zone` (single source: Postgres tzdata); `shared/time` serves input and display.
+- Multilingual: single locale `en`, no translation tables (YAGNI). When a second language arrives, tenant-written texts (privacy, terms, description) will require `tenant_content_translations (tenant_id, locale, ...)`: an expand-only addition, no impact on the current schema.
 
 ---
 
-## 4. Sicurezza dei dati: ruoli, grant, RLS
+## 4. Data security: roles, grants, RLS
 
-### 4.1 Ruoli
+### 4.1 Roles
 
-| Ruolo | Attributi | Uso | Credenziale |
+| Role | Attributes | Use | Credential |
 |---|---|---|---|
-| `rentcar_admin` | superuser/CREATEROLE del provider o del container | **solo** bootstrap una tantum (ruoli, database, estensione) | fuori dall'app |
-| `rentcar_owner` | `NOLOGIN NOSUPERUSER NOBYPASSRLS`; proprietario di DB e oggetti | non e un login runtime; proprietario delle funzioni `SECURITY DEFINER` (retention, eliminazione tenant) | nessuna |
-| `rentcar_migrator` | `LOGIN NOSUPERUSER NOBYPASSRLS`, membro di `rentcar_owner` | CI e servizio `migrate` (`DIRECT_DATABASE_URL`): il runner esegue `SET ROLE rentcar_owner` a inizio sessione cosi gli oggetti creati hanno il proprietario giusto (SR-DB-01, SR-DB-10) | solo CI/compose, mai nel processo runtime |
-| `rentcar_app` | `LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE`, non proprietario, nessun DDL | runtime (`DATABASE_URL`, pooler) | secret manager dell'hosting |
-| `rentcar_backup` | `LOGIN NOSUPERUSER`, `default_transaction_read_only=on`, `SELECT` su tutto; `BYPASSRLS` (SR-DB-01) **dove il provider permette di concederlo**, altrimenti `NOBYPASSRLS` + policy `backup_read` (4.3) | `pg_dump` notturno (`BACKUP_DATABASE_URL`, diretta) | secret del workflow di backup |
+| `rentcar_admin` | provider/container superuser/CREATEROLE | **only** one-off bootstrap (roles, database, extension) | outside the app |
+| `rentcar_owner` | `NOLOGIN NOSUPERUSER NOBYPASSRLS`; owner of DB and objects | not a runtime login; owner of the `SECURITY DEFINER` functions (retention, tenant deletion) | none |
+| `rentcar_migrator` | `LOGIN NOSUPERUSER NOBYPASSRLS`, member of `rentcar_owner` | CI and `migrate` service (`DIRECT_DATABASE_URL`): the runner executes `SET ROLE rentcar_owner` at session start so created objects have the right owner (SR-DB-01, SR-DB-10) | CI/compose only, never in the runtime process |
+| `rentcar_app` | `LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE`, not an owner, no DDL | runtime (`DATABASE_URL`, pooler) | hosting secret manager |
+| `rentcar_backup` | `LOGIN NOSUPERUSER`, `default_transaction_read_only=on`, `SELECT` on everything; `BYPASSRLS` (SR-DB-01) **where the provider allows granting it**, otherwise `NOBYPASSRLS` + `backup_read` policy (4.3) | nightly `pg_dump` (`BACKUP_DATABASE_URL`, direct) | backup workflow secret |
 
-Impostazioni di ruolo (SR-DB-07): `ALTER ROLE rentcar_app SET statement_timeout='10s', lock_timeout='3s', idle_in_transaction_session_timeout='15s'`; `rentcar_migrator`: `lock_timeout='5s'`, `statement_timeout='120s'` impostati dal runner. Nessuna chiamata di rete (SMTP, S3) dentro una transazione DB.
+Role settings (SR-DB-07): `ALTER ROLE rentcar_app SET statement_timeout='10s', lock_timeout='3s', idle_in_transaction_session_timeout='15s'`; `rentcar_migrator`: `lock_timeout='5s'`, `statement_timeout='120s'` set by the runner. No network call (SMTP, S3) inside a DB transaction.
 
-Controlli all'avvio (`readyz`, non per parsing dell'URL): `current_user = 'rentcar_app'`, `rolsuper = false`, `rolbypassrls = false`; fallisce chiuso. Il superuser ignora sempre la RLS anche con FORCE: l'immagine Compose NON usa `POSTGRES_USER=rentcar_owner`, ma un superuser di bootstrap separato e uno script `docker-entrypoint-initdb.d/10-roles.sh` che crea i quattro ruoli con password da env. Il controllo di avvio e quello di SR-CFG-02 (una query su `pg_roles`: non superuser, non proprietario, non BYPASSRLS).
+Startup checks (`readyz`, not by parsing the URL): `current_user = 'rentcar_app'`, `rolsuper = false`, `rolbypassrls = false`; fails closed. A superuser always ignores RLS even with FORCE: the Compose image does NOT use `POSTGRES_USER=rentcar_owner`, but a separate bootstrap superuser and a `docker-entrypoint-initdb.d/10-roles.sh` script that creates the four roles with passwords from env. The startup check is the one in SR-CFG-02 (one query on `pg_roles`: not superuser, not owner, not BYPASSRLS).
 
-`public`: `REVOKE ALL ON SCHEMA public FROM PUBLIC; GRANT USAGE ... TO rentcar_app, rentcar_backup`. Nessun `ALTER DEFAULT PRIVILEGES`: ogni grant e esplicito nella migrazione della tabella (un grant dimenticato produce `permission denied` e un test lo intercetta). Schema `drizzle`: `rentcar_app` ha solo `USAGE` + `SELECT` su `__drizzle_migrations` (per `readyz`: numero di righe >= numero di voci nel journal della build).
+`public`: `REVOKE ALL ON SCHEMA public FROM PUBLIC; GRANT USAGE ... TO rentcar_app, rentcar_backup`. No `ALTER DEFAULT PRIVILEGES`: every grant is explicit in the table's migration (a forgotten grant produces `permission denied` and a test catches it). Schema `drizzle`: `rentcar_app` has only `USAGE` + `SELECT` on `__drizzle_migrations` (for `readyz`: row count >= number of entries in the build's journal).
 
-### 4.2 Variabili di sessione (GUC) e funzioni helper
+### 4.2 Session variables (GUC) and helper functions
 
-Tutte transaction-local (`set_config(name, value, true)`), mai di sessione (pooler):
+All transaction-local (`set_config(name, value, true)`), never session-level (pooler):
 
-| GUC | Impostata da | Significato |
+| GUC | Set by | Meaning |
 |---|---|---|
-| `app.tenant_id` | `withTenant(scope)` (con `app.scope='tenant'`) | uuid del tenant |
-| `app.scope` | `withTenant` = `tenant`; `withSystemTx(purpose)` (nome di SR-DB-05, `withSystem` in 03b) = `resolve`, `system_auth`, `system`, `job`, `bootstrap` | contesto d'accesso; ogni `purpose` (enum chiuso, test di architettura) corrisponde a un solo scope; ogni uso scrive `system.context.used` in `security_event` (fuori dalla transazione di lavoro) |
-| `app.actor_id` | `withSystemTx` | uuid utente systemadmin o vuoto (job) |
-| `app.purge_mode` | solo le funzioni `SECURITY DEFINER` di retention/eliminazione | autorizza il DELETE sugli archivi append-only (`'retention'` o l'uuid del tenant in eliminazione) |
+| `app.tenant_id` | `withTenant(scope)` (with `app.scope='tenant'`) | tenant uuid |
+| `app.scope` | `withTenant` = `tenant`; `withSystemTx(purpose)` (SR-DB-05 name, `withSystem` in 03b) = `resolve`, `system_auth`, `system`, `job`, `bootstrap` | access context; each `purpose` (closed enum, architecture test) maps to a single scope; each use writes `system.context.used` in `security_event` (outside the work transaction) |
+| `app.actor_id` | `withSystemTx` | systemadmin user uuid or empty (job) |
+| `app.purge_mode` | only the retention/deletion `SECURITY DEFINER` functions | authorises DELETE on append-only archives (`'retention'` or the uuid of the tenant being deleted) |
 
-`withTenant` e `withSystemTx` sono mutuamente esclusivi: la seconda non imposta `app.tenant_id`. Il valore `tenant_id` e validato come uuid prima di `set_config`; `ROLLBACK` fallito -> `release(true)` (SR-DB-03).
+`withTenant` and `withSystemTx` are mutually exclusive: the latter does not set `app.tenant_id`. The `tenant_id` value is validated as a uuid before `set_config`; failed `ROLLBACK` -> `release(true)` (SR-DB-03).
 
 ```sql
 CREATE FUNCTION app_tenant_id() RETURNS uuid LANGUAGE sql STABLE
@@ -178,461 +178,461 @@ CREATE FUNCTION app_scope() RETURNS text LANGUAGE sql STABLE
   AS $$ SELECT NULLIF(current_setting('app.scope', true), '') $$;
 ```
 
-La forma `NULLIF(..., '')` e quella di SR-DB-02 [V]. Le policy chiamano `(SELECT app_tenant_id())` (sub-select: valutata una volta per statement, non per riga). Un valore non-uuid in `app.tenant_id` produce errore, cioe nega (fail closed). Limite noto: la RLS qui protegge da errori applicativi (filtro dimenticato), **non** da una SQL injection con controllo completo dello statement, che potrebbe chiamare `set_config`; la difesa contro la injection sono le query parametrizzate e le regole Semgrep di 03b.
+The `NULLIF(..., '')` form is the one in SR-DB-02 [V]. Policies call `(SELECT app_tenant_id())` (sub-select: evaluated once per statement, not per row). A non-uuid value in `app.tenant_id` raises an error, i.e. denies (fail closed). Known limit: RLS here protects from application errors (forgotten filter), **not** from SQL injection with full control of the statement, which could call `set_config`; the defence against injection is parameterised queries and the Semgrep rules of 03b.
 
-### 4.3 Baseline RLS per ogni tabella
+### 4.3 RLS baseline for every table
 
-Helper `rls_baseline(p_table regclass, p_tenant_scoped boolean)` (creato nella migrazione `0000`, non eseguibile da `rentcar_app`) applica:
+Helper `rls_baseline(p_table regclass, p_tenant_scoped boolean)` (created in migration `0000`, not executable by `rentcar_app`) applies:
 
 ```sql
 ALTER TABLE t ENABLE ROW LEVEL SECURITY;  ALTER TABLE t FORCE ROW LEVEL SECURITY;
-CREATE POLICY owner_all   ON t TO rentcar_owner USING (true) WITH CHECK (true);   -- migrazioni/backfill/purge
+CREATE POLICY owner_all   ON t TO rentcar_owner USING (true) WITH CHECK (true);   -- migrations/backfill/purge
 CREATE POLICY backup_read ON t FOR SELECT TO rentcar_backup USING (true);          -- pg_dump --enable-row-security
--- se tenant-scoped:
+-- if tenant-scoped:
 CREATE POLICY tenant_isolation ON t
   USING (tenant_id = (SELECT app_tenant_id())) WITH CHECK (tenant_id = (SELECT app_tenant_id()));
 ```
 
-Note oneste: (a) `owner_all` rende il proprietario di fatto esente (serve a migrazioni con backfill e alle funzioni definer); la protezione e che la credenziale owner non arriva mai al runtime (controllo `readyz`). (b) `backup_read` e l'alternativa portabile a `BYPASSRLS` (che alcuni provider non permettono di concedere): il dump non e filtrato dalla RLS in nessuno dei due casi, e il test di restore confronta i conteggi di riga per tabella (SR-DB-09, ABU-M6-06). Entrambe verificate [V]. Test di catalogo: ogni tabella con RLS ha le policy `owner_all` e `backup_read`; ogni tabella con `tenant_id` ha `tenant_isolation` oppure e nell'elenco "miste" con policy esplicite.
+Honest notes: (a) `owner_all` makes the owner effectively exempt (needed by migrations with backfill and by definer functions); the protection is that the owner credential never reaches the runtime (`readyz` check). (b) `backup_read` is the portable alternative to `BYPASSRLS` (which some providers do not allow granting): the dump is not filtered by RLS in either case, and the restore test compares row counts per table (SR-DB-09, ABU-M6-06). Both verified [V]. Catalog test: every table with RLS has the `owner_all` and `backup_read` policies; every table with `tenant_id` has `tenant_isolation` or is in the "mixed" list with explicit policies.
 
-**Eccezioni documentate** (elenco chiuso controllato dal test di catalogo, SR-DB-02): `rate_limit_buckets` senza RLS (solo HMAC e contatori; richiesta prima di sapere il tenant). Gli archivi di piattaforma (`security_event`, `platform_audit`, `slug_tombstone`, `deletion_ledger`) hanno RLS con policy per scope (non per tenant). Nessuna vista su tabelle di tenant senza `security_invoker = true` (una vista definer aggirerebbe la RLS): test di catalogo.
+**Documented exceptions** (closed list checked by the catalog test, SR-DB-02): `rate_limit_buckets` without RLS (only HMACs and counters; needed before the tenant is known). The platform archives (`security_event`, `platform_audit`, `slug_tombstone`, `deletion_ledger`) have RLS with per-scope policies (not per tenant). No view over tenant tables without `security_invoker = true` (a definer view would bypass RLS): catalog test.
 
-### 4.4 Grant al ruolo runtime (`rentcar_app`)
+### 4.4 Grants to the runtime role (`rentcar_app`)
 
-S=SELECT I=INSERT U=UPDATE D=DELETE. Nessun TRUNCATE/REFERENCES/TRIGGER. Nessuna sequenza (chiavi uuid).
+S=SELECT I=INSERT U=UPDATE D=DELETE. No TRUNCATE/REFERENCES/TRIGGER. No sequences (uuid keys).
 
-| Tabella | S | I | U | D | Nota |
+| Table | S | I | U | D | Note |
 |---|---|---|---|---|---|
-| tenants | x | x | x | | tombstone via funzione definer |
+| tenants | x | x | x | | tombstone via definer function |
 | tenant_settings | x | x | x | | |
-| tenant_smtp_configs | x | x | x | x | D = rimozione config |
-| subscriptions | x | x | x | | annullo = status |
-| users | x | x | x | | niente delete |
-| sessions | x | x | x | x | D = logout/revoca (SR-SES-06) e purge |
+| tenant_smtp_configs | x | x | x | x | D = config removal |
+| subscriptions | x | x | x | | cancellation = status |
+| users | x | x | x | | no delete |
+| sessions | x | x | x | x | D = logout/revocation (SR-SES-06) and purge |
 | credential_tokens | x | x | x | x | D = purge |
-| vehicles | x | x | x | x | D solo senza storico (FK lo impone) |
+| vehicles | x | x | x | x | D only without history (FK enforces it) |
 | vehicle_photos | x | x | x | x | |
 | expenses | x | x | x | x | |
-| customers | x | x | x | | anonimizza = UPDATE |
-| bookings | x | x | x | | annulla = UPDATE |
-| revenue_year_snapshots | x | x | | | immutabili |
-| revenue_year_snapshot_rows | x | x | | | immutabili |
+| customers | x | x | x | | anonymise = UPDATE |
+| bookings | x | x | x | | cancel = UPDATE |
+| revenue_year_snapshots | x | x | | | immutable |
+| revenue_year_snapshot_rows | x | x | | | immutable |
 | audit_log | x | x | | | append-only |
-| security_event | x | x | | | append-only; lettura solo scope `system` |
+| security_event | x | x | | | append-only; read only in scope `system` |
 | platform_audit | x | x | | | append-only; scope `system` |
-| slug_tombstone | x | x | | | solo INSERT/SELECT; scadenza via funzione di retention |
+| slug_tombstone | x | x | | | INSERT/SELECT only; expiry via retention function |
 | deletion_ledger | x | x | | | append-only |
 | email_log | x | x | x | x | D = retention |
 | job_runs | x | x | x | x | D = retention |
 | rate_limit_buckets | x | x | x | x | |
 
-`EXECUTE` su `purge_tenant_data(uuid)`, `purge_expired_records()` (retention di `audit_log`, `security_event`, `slug_tombstone`), `platform_kpis(...)`: solo `rentcar_app` (`REVOKE ... FROM PUBLIC`). Un test di catalogo confronta i privilegi reali con questa tabella (dichiarata in `tests/security/grants-matrix.ts`).
+`EXECUTE` on `purge_tenant_data(uuid)`, `purge_expired_records()` (retention of `audit_log`, `security_event`, `slug_tombstone`), `platform_kpis(...)`: only `rentcar_app` (`REVOKE ... FROM PUBLIC`). A catalog test compares actual privileges with this table (declared in `tests/security/grants-matrix.ts`).
 
-### 4.5 Matrice delle policy per i percorsi senza tenant (risolve TD-4)
+### 4.5 Policy matrix for tenant-less paths (resolves TD-4)
 
-Colonne = valore di `app.scope`: `R`=resolve, `A`=system_auth (login systemadmin, non ancora autenticato), `S`=system (console systemadmin autenticata), `J`=job, `B`=bootstrap (CLI di creazione systemadmin). Una cella vuota = nessuna policy = negato. Il percorso tenant (`app.tenant_id`) ha sempre `tenant_isolation` su tutti i comandi tranne dove indicato.
+Columns = value of `app.scope`: `R`=resolve, `A`=system_auth (systemadmin login, not yet authenticated), `S`=system (authenticated systemadmin console), `J`=job, `B`=bootstrap (systemadmin creation CLI). An empty cell = no policy = denied. The tenant path (`app.tenant_id`) always has `tenant_isolation` on all commands except where noted.
 
-| Tabella | R | A | S | J | B |
+| Table | R | A | S | J | B |
 |---|---|---|---|---|---|
 | tenants | S | | S,I,U | S | |
 | tenant_settings | | | S,I,U | | |
 | tenant_smtp_configs | | | S,I,U | | |
 | subscriptions | | | S,I,U | S | |
-| users | | S,U dove `role='systemadmin'` | S,U dove `role IN ('admin','systemadmin')`; I dove `role='admin'` | | S,I dove `role='systemadmin'` |
-| sessions | | S,I,D dove `tenant_id IS NULL` | S,D (revoca per sospensione/sostituzione admin) | D dove scadute da > 7 giorni | |
-| credential_tokens | | S,I,U dove `tenant_id IS NULL` | S,I,U | D dove scaduti da > 7 giorni | I dove `tenant_id IS NULL` |
-| audit_log | | I | S dove `tenant_id IS NULL OR entity_type IN ('tenant','subscription','admin_account')`; I | I | I |
+| users | | S,U where `role='systemadmin'` | S,U where `role IN ('admin','systemadmin')`; I where `role='admin'` | | S,I where `role='systemadmin'` |
+| sessions | | S,I,D where `tenant_id IS NULL` | S,D (revocation on suspension/admin replacement) | D where expired for > 7 days | |
+| credential_tokens | | S,I,U where `tenant_id IS NULL` | S,I,U | D where expired for > 7 days | I where `tenant_id IS NULL` |
+| audit_log | | I | S where `tenant_id IS NULL OR entity_type IN ('tenant','subscription','admin_account')`; I | I | I |
 | security_event | | I | S,I | I | I |
 | platform_audit | | | S,I | I | I |
 | slug_tombstone | S | | S,I | | |
 | deletion_ledger | | | S,I | | |
-| email_log | | I dove `tenant_id IS NULL` | S,I,U | S, I, U dove `created_at < now() - 90 days` (azzeramento destinatario), D dove `created_at < now() - 12 months`, U dove `tenant_id IS NULL` | I dove `tenant_id IS NULL` |
+| email_log | | I where `tenant_id IS NULL` | S,I,U | S, I, U where `created_at < now() - 90 days` (recipient nulling), D where `created_at < now() - 12 months`, U where `tenant_id IS NULL` | I where `tenant_id IS NULL` |
 | job_runs | | | S | S,I,U,D | |
-| vehicles, vehicle_photos, expenses, customers, bookings, snapshots (2), rate_limit | nessun accesso (R,A,S,J,B) | | | | |
+| vehicles, vehicle_photos, expenses, customers, bookings, snapshots (2), rate_limit | no access (R,A,S,J,B) | | | | |
 
-Note: `tenants` in `R` serve a risolvere lo slug; `slug_tombstone` in `R` serve a rispondere con lo stesso 404 generico ai slug riservati dalla cancellazione (SR-ACC-07). Gli eventi `security_event` vanno scritti in una transazione separata e breve, cosi un `ROLLBACK` del lavoro (es. accesso negato) non li perde.
+Notes: `tenants` in `R` serves slug resolution; `slug_tombstone` in `R` serves answering with the same generic 404 for slugs reserved by deletion (SR-ACC-07). `security_event` events must be written in a separate, short transaction so a `ROLLBACK` of the work (e.g. access denied) does not lose them.
 
-Conseguenze verificabili: nessun percorso di sistema legge prenotazioni o clienti (A-13); la risoluzione dello slug non puo toccare utenti o sessioni; i job lavorano nei tenant con `withTenant` per ogni passo (la lista dei tenant arriva da `J`). `systemadmin` non cancella nulla: l'eliminazione di un tenant passa dalla funzione definer (sezione 9.3). La matrice e dichiarata in `tests/security/rls-matrix.ts` e un test genera per ogni (tipo, tabella, comando) il risultato atteso confrontandolo con `pg_policies`.
+Verifiable consequences: no system path reads bookings or customers (A-13); slug resolution cannot touch users or sessions; jobs work inside tenants with `withTenant` for each step (the tenant list comes from `J`). `systemadmin` deletes nothing: tenant deletion goes through the definer function (section 9.3). The matrix is declared in `tests/security/rls-matrix.ts` and a test generates, for each (scope, table, command), the expected outcome and compares it with `pg_policies`.
 
-**Dati aggregati per KPI-7**: la console del systemadmin mostra solo conteggio prenotazioni per tenant (decisione del coordinatore, 04a). Si espone con `platform_kpis(p_from timestamptz, p_to timestamptz)`, funzione `SECURITY DEFINER` che richiede `app_scope() = 'system'` e restituisce per tenant solo `tenant_id, bookings_created, bookings_completed`. Ricavi per tenant NON inclusi (ASSUNZIONE DB-A7: KPI-7 li citava, il coordinatore ha ridotto a conteggi; si aggiungono dopo conferma).
+**Aggregated data for KPI-7**: the systemadmin console shows only the booking count per tenant (coordinator decision, 04a). It is exposed through `platform_kpis(p_from timestamptz, p_to timestamptz)`, a `SECURITY DEFINER` function that requires `app_scope() = 'system'` and returns per tenant only `tenant_id, bookings_created, bookings_completed`. Revenue per tenant is NOT included (ASSUMPTION DB-A7: KPI-7 mentioned it, the coordinator reduced it to counts; to be added after confirmation).
 
 ---
 
-## 5. Dizionario dati
+## 5. Data dictionary
 
-Legenda: PK, FK, U=unique, NN=not null. `tenant_id` e sempre FK `tenants(id) ON DELETE NO ACTION`. Colonne `created_at`/`updated_at` non ripetute. "Privacy": P=dato personale, S=segreto, `-`=nessuno.
+Legend: PK, FK, U=unique, NN=not null. `tenant_id` is always an FK `tenants(id) ON DELETE NO ACTION`. `created_at`/`updated_at` columns are not repeated. "Privacy": P=personal data, S=secret, `-`=none.
 
-### 5.1 tenants (realm piattaforma, leggibile dal tenant per la propria riga)
+### 5.1 tenants (platform realm, readable by the tenant for its own row)
 
-| Colonna | Tipo | Vincoli | Privacy / note |
+| Column | Type | Constraints | Privacy / notes |
 |---|---|---|---|
 | id | uuid | PK | |
-| slug | text | NN, U `tenants_slug_key`, CHECK `~ '^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$'` | immutabile (trigger, SR-ACC-07), tranne la rinomina `deleted-<id>` fatta dalla funzione di eliminazione (`current_user = rentcar_owner`); alla cancellazione lo slug originale passa in `slug_tombstone` (12 mesi, 5.21); parole riservate nel codice (test sulle rotte) |
-| name | text | NN, 1..120 | dopo l'eliminazione: `deleted-<8 char id>` |
+| slug | text | NN, U `tenants_slug_key`, CHECK `~ '^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$'` | immutable (trigger, SR-ACC-07), except the `deleted-<id>` rename done by the deletion function (`current_user = rentcar_owner`); on deletion the original slug moves to `slug_tombstone` (12 months, 5.21); reserved words in code (route test) |
+| name | text | NN, 1..120 | after deletion: `deleted-<8 char id>` |
 | status | text | NN default `active`, CHECK in (`active`,`suspended`,`terminated`,`deleted`) | |
-| country_code | char(2) | NN default `'IT'`, CHECK `~ '^[A-Z]{2}$'` | ASSUNZIONE DB-A1 (04a, UXA-6): ISO 3166-1, serve alla normalizzazione dei telefoni (REQ-10); **distinto** dal paese dell'indirizzo |
-| time_zone | text | NN default `'Europe/Rome'` | trigger `tenants_validate_tz` verifica contro `pg_timezone_names` (un valore errato romperebbe le query `AT TIME ZONE`) |
-| currency | char(3) | NN default `'EUR'`, CHECK `~ '^[A-Z]{3}$'` | esponente decimale derivato da tabella ISO in `shared/money` |
-| dpa_signed_at | timestamptz | NULL | ASSUNZIONE DB-A2 (UX-9, in attesa dell'utente): spuntato a mano dal systemadmin (solo percorso `S`); non e prerequisito tecnico |
+| country_code | char(2) | NN default `'IT'`, CHECK `~ '^[A-Z]{2}$'` | ASSUMPTION DB-A1 (04a, UXA-6): ISO 3166-1, used for phone normalisation (REQ-10); **distinct** from the address country |
+| time_zone | text | NN default `'Europe/Rome'` | trigger `tenants_validate_tz` checks against `pg_timezone_names` (a wrong value would break `AT TIME ZONE` queries) |
+| currency | char(3) | NN default `'EUR'`, CHECK `~ '^[A-Z]{3}$'` | decimal exponent derived from an ISO table in `shared/money` |
+| dpa_signed_at | timestamptz | NULL | ASSUMPTION DB-A2 (UX-9, awaiting the user): ticked manually by the systemadmin (path `S` only); not a technical prerequisite |
 | terminated_at | timestamptz | NULL | |
-| deletion_due_at | timestamptz | NULL | `terminated_at + 90 giorni` (calcolato dall'app, vincolato da CHECK `deletion_due_at >= terminated_at`) |
-| export_delivered_at | timestamptz | NULL | US-066: senza, l'eliminazione e bloccata |
-| export_storage_key | text | NULL | chiave sotto `tenants/{id}/exports/` |
-| deletion_override_reason | text | NULL, <= 500 | permette l'eliminazione senza export consegnato |
+| deletion_due_at | timestamptz | NULL | `terminated_at + 90 days` (computed by the app, constrained by CHECK `deletion_due_at >= terminated_at`) |
+| export_delivered_at | timestamptz | NULL | US-066: without it, deletion is blocked |
+| export_storage_key | text | NULL | key under `tenants/{id}/exports/` |
+| deletion_override_reason | text | NULL, <= 500 | allows deletion without a delivered export |
 | deleted_at | timestamptz | NULL | |
 
-CHECK di coerenza: `(status IN ('terminated','deleted')) = (terminated_at IS NOT NULL)`; `(status = 'deleted') = (deleted_at IS NOT NULL)`.
-Indici: PK, `tenants_slug_key`; indice parziale `(deletion_due_at) WHERE status = 'terminated'` (promemoria prima dell'eliminazione). Trigger: `tenants_slug_immutable`, `tenants_validate_tz`, `set_updated_at`.
-RLS: `tenant_isolation` solo SELECT (`id = app_tenant_id()`), piu policy di sistema della 4.5. Il tenant non puo modificare mai la propria riga (nessuna policy UPDATE per `tenant`): tutto cio che il tenant admin modifica sta in `tenant_settings`.
+Consistency CHECKs: `(status IN ('terminated','deleted')) = (terminated_at IS NOT NULL)`; `(status = 'deleted') = (deleted_at IS NOT NULL)`.
+Indexes: PK, `tenants_slug_key`; partial index `(deletion_due_at) WHERE status = 'terminated'` (reminder before deletion). Triggers: `tenants_slug_immutable`, `tenants_validate_tz`, `set_updated_at`.
+RLS: `tenant_isolation` SELECT only (`id = app_tenant_id()`), plus the system policies of 4.5. The tenant can never modify its own row (no UPDATE policy for `tenant`): everything the tenant admin edits lives in `tenant_settings`.
 
-### 5.2 tenant_settings (1:1, modificabile dal tenant admin e dal systemadmin)
+### 5.2 tenant_settings (1:1, editable by the tenant admin and the systemadmin)
 
-| Colonna | Tipo | Vincoli | Privacy / note |
+| Column | Type | Constraints | Privacy / notes |
 |---|---|---|---|
 | tenant_id | uuid | PK, FK tenants | |
-| title | text | NN, CHECK `char_length(title) BETWEEN 1 AND 45` | decisione utente: max 45; iniziale = nome |
-| short_description | text | NULL, CHECK `char_length <= 160` | decisione utente; meta description (SEO) |
-| contact_email | text | NN, <= 254 | dato dell'azienda (anche pubblico) |
-| contact_phone | text | NN, <= 32 | idem |
-| address_street, address_postal_code, address_city | text | NULL | indirizzo strutturato opzionale |
-| address_country_code | char(2) | NULL, CHECK `~ '^[A-Z]{2}$'` | distinto da `tenants.country_code` |
-| (vincolo indirizzo) | | CHECK: i quattro campi indirizzo sono **tutti NULL o tutti NN** | ASSUNZIONE DB-A3: un indirizzo parziale non serve a SEO/PDF |
+| title | text | NN, CHECK `char_length(title) BETWEEN 1 AND 45` | user decision: max 45; initially = name |
+| short_description | text | NULL, CHECK `char_length <= 160` | user decision; meta description (SEO) |
+| contact_email | text | NN, <= 254 | business data (also public) |
+| contact_phone | text | NN, <= 32 | same |
+| address_street, address_postal_code, address_city | text | NULL | optional structured address |
+| address_country_code | char(2) | NULL, CHECK `~ '^[A-Z]{2}$'` | distinct from `tenants.country_code` |
+| (address constraint) | | CHECK: the four address fields are **all NULL or all NN** | ASSUMPTION DB-A3: a partial address is of no use to SEO/PDF |
 | logo_storage_key | text | NULL | |
 | logo_alt | text | NULL, CHECK `logo_storage_key IS NULL OR char_length(logo_alt) > 0` | FR-BRD-08 |
-| og_image_key | text | NULL, CHECK `og_image_key IS NULL OR logo_storage_key IS NOT NULL` | decisione utente + 09-seo: immagine 1200x630 derivata dal logo al salvataggio; l'app la rigenera e cancella la precedente a ogni cambio logo |
-| color_primary, color_secondary, color_accent, color_background, color_text | char(7) | NULL, CHECK `~ '^#[0-9a-fA-F]{6}$'` | NULL = default di piattaforma (nessun duplicato dei token nel DB) |
+| og_image_key | text | NULL, CHECK `og_image_key IS NULL OR logo_storage_key IS NOT NULL` | user decision + 09-seo: 1200x630 image derived from the logo on save; the app regenerates it and deletes the previous one on every logo change |
+| color_primary, color_secondary, color_accent, color_background, color_text | char(7) | NULL, CHECK `~ '^#[0-9a-fA-F]{6}$'` | NULL = platform default (no duplicated tokens in the DB) |
 | font_key | text | NN default `inter`, CHECK in (`inter`,`manrope`,`plus_jakarta_sans`) | |
 | theme_mode | text | NN default `auto`, CHECK in (`auto`,`light`,`dark`) | |
-| theme_version | integer | NN default 1 | cache-buster di `theme.css?v=` |
+| theme_version | integer | NN default 1 | cache-buster for `theme.css?v=` |
 | min_rental_days | smallint | NN default 1, CHECK >= 1 | |
 | max_rental_days | smallint | NN default 30, CHECK `>= min_rental_days` | |
-| lead_time_minutes | integer | NN default 0, CHECK 0..43200 | tetto = ASSUNZIONE DB-A4 |
-| buffer_minutes | integer | NN default 0, CHECK 0..1440 | tetto = ASSUNZIONE DB-A4 (range finito per il vincolo di esclusione) |
+| lead_time_minutes | integer | NN default 0, CHECK 0..43200 | cap = ASSUMPTION DB-A4 |
+| buffer_minutes | integer | NN default 0, CHECK 0..1440 | cap = ASSUMPTION DB-A4 (finite range for the exclusion constraint) |
 | privacy_notice_url, rental_terms_url | text | NULL, CHECK `~ '^https://'`, <= 2048 | REQ-12 |
 | privacy_notice_text, rental_terms_text | text | NULL, <= 20000 | |
 | notify_new_booking | boolean | NN default true | FR-MAIL-07 |
 
-Indici: solo PK. RLS: `tenant_isolation` (tutti i comandi) + `S` (S,I,U). Il tenant e il systemadmin scrivono entrambi: ogni scrittura produce una riga audit con l'attore.
+Indexes: PK only. RLS: `tenant_isolation` (all commands) + `S` (S,I,U). Both the tenant and the systemadmin write: every write produces an audit row with the actor.
 
-### 5.3 tenant_smtp_configs (1:1, segreto separato)
+### 5.3 tenant_smtp_configs (1:1, separate secret)
 
-| Colonna | Tipo | Vincoli | Privacy / note |
+| Column | Type | Constraints | Privacy / notes |
 |---|---|---|---|
-| tenant_id | uuid | PK, FK | assenza di riga = "SMTP non configurato" (FR-MAIL-03) |
-| host | text | NN, <= 255 | validato dal guardrail SSRF a salvataggio, test e invio |
+| tenant_id | uuid | PK, FK | no row = "SMTP not configured" (FR-MAIL-03) |
+| host | text | NN, <= 255 | validated by the SSRF guard on save, test and send |
 | port | integer | NN, CHECK in (25,465,587,2525) | |
-| security | text | NN, CHECK in (`tls`,`starttls`) | TLS sempre verificato |
+| security | text | NN, CHECK in (`tls`,`starttls`) | TLS always verified |
 | username | text | NN | S |
-| password_enc | text | NN, CHECK `~ '^v1\.[0-9a-f]{8}\.'` | S (SR-CRY-01/03/04): AES-256-GCM, formato `v1.<kid>.<nonce_b64url>.<ct+tag_b64url>`, AAD = `rc:v1:smtp_password:{tenantId}`; la rotazione re-cifra a lotti; mai in log/audit/CSV; tabella separata cosi le letture di `tenant_settings` non la caricano |
+| password_enc | text | NN, CHECK `~ '^v1\.[0-9a-f]{8}\.'` | S (SR-CRY-01/03/04): AES-256-GCM, format `v1.<kid>.<nonce_b64url>.<ct+tag_b64url>`, AAD = `rc:v1:smtp_password:{tenantId}`; rotation re-encrypts in batches; never in log/audit/CSV; separate table so reads of `tenant_settings` do not load it |
 | from_address | text | NN | |
 | from_name | text | NULL | |
-| last_test_at, last_test_ok, last_test_error | timestamptz, boolean, text | NULL; errore <= 500, ripulito | |
+| last_test_at, last_test_ok, last_test_error | timestamptz, boolean, text | NULL; error <= 500, scrubbed | |
 
-RLS: `tenant_isolation` + `S` (S,I,U). Il dump contiene solo il testo cifrato; la chiave `APP_ENCRYPTION_KEY` non deve mai stare con i dump (sezione 10).
+RLS: `tenant_isolation` + `S` (S,I,U). The dump contains only ciphertext; the `APP_ENCRYPTION_KEY` key must never be stored with the dumps (section 10).
 
 ### 5.4 subscriptions
 
-| Colonna | Tipo | Vincoli | Note |
+| Column | Type | Constraints | Notes |
 |---|---|---|---|
 | id | uuid | PK, U `(tenant_id, id)` | |
 | tenant_id | uuid | NN, FK | |
 | max_vehicles, max_operators | integer | NN, CHECK >= 0 | |
-| start_date, end_date | date | NN, CHECK `end_date >= start_date` | `end_date` inclusivo, fine giornata nel fuso del tenant |
-| price_minor | bigint | NN, CHECK >= 0 | informativo (FR-SYS-11) |
-| price_currency | char(3) | NN | indipendente dal tenant (A-14) |
-| status | text | NN default `active`, CHECK in (`active`,`cancelled`) | `expired` derivato, non salvato (deviazione consapevole da spec §5) |
+| start_date, end_date | date | NN, CHECK `end_date >= start_date` | `end_date` inclusive, end of day in the tenant time zone |
+| price_minor | bigint | NN, CHECK >= 0 | informational (FR-SYS-11) |
+| price_currency | char(3) | NN | independent from the tenant (A-14) |
+| status | text | NN default `active`, CHECK in (`active`,`cancelled`) | `expired` derived, not stored (conscious deviation from spec §5) |
 | cancelled_at | timestamptz | NULL, CHECK `(status='cancelled') = (cancelled_at IS NOT NULL)` | |
 
-Vincolo: `EXCLUDE USING gist (tenant_id WITH =, daterange(start_date, end_date, '[]') WITH &&) WHERE (status <> 'cancelled')` (A-6, US-012). Indice: `(tenant_id, end_date DESC)` (sottoscrizione corrente). Promemoria di rinnovo: nessuna tabella di marker, basta `job_runs` con `period_key = 'sub:<id>:<end_date>'` (se si estende la data, nasce una nuova chiave e un nuovo promemoria).
-Limiti piano: serializzati con `pg_advisory_xact_lock(hashtextextended('limit:vehicles:' || tenant_id, 0))` prima del conteggio (US-013, vale anche per operatori).
-RLS: `tenant_isolation` (solo SELECT per il percorso tenant: l'admin non si modifica il piano; policy `FOR SELECT`), `S` (S,I,U), `J` (S).
+Constraint: `EXCLUDE USING gist (tenant_id WITH =, daterange(start_date, end_date, '[]') WITH &&) WHERE (status <> 'cancelled')` (A-6, US-012). Index: `(tenant_id, end_date DESC)` (current subscription). Renewal reminder: no marker table, `job_runs` with `period_key = 'sub:<id>:<end_date>'` is enough (if the date is extended, a new key and a new reminder arise).
+Plan limits: serialised with `pg_advisory_xact_lock(hashtextextended('limit:vehicles:' || tenant_id, 0))` before the count (US-013, also valid for operators).
+RLS: `tenant_isolation` (SELECT only for the tenant path: the admin does not edit their own plan; policy `FOR SELECT`), `S` (S,I,U), `J` (S).
 
 ### 5.5 users
 
-| Colonna | Tipo | Vincoli | Privacy / note |
+| Column | Type | Constraints | Privacy / notes |
 |---|---|---|---|
 | id | uuid | PK, U `(tenant_id, id)` | |
 | tenant_id | uuid | NULL, FK | NULL = systemadmin |
 | role | text | NN, CHECK in (`systemadmin`,`admin`,`operator`), CHECK `(role='systemadmin') = (tenant_id IS NULL)` | |
-| username | text | NN, CHECK `username = lower(username) AND username ~ '^[a-z0-9._-]{3,64}$'` | P; normalizzato dall'app; unico anche tra utenti disattivati (A-39: lo storico resta sotto lo stesso username) |
+| username | text | NN, CHECK `username = lower(username) AND username ~ '^[a-z0-9._-]{3,64}$'` | P; normalised by the app; unique also among deactivated users (A-39: history stays under the same username) |
 | display_name | text | NN, 1..120 | P |
-| email | text | NN, <= 254 | P; non unica |
-| password_hash | text | NULL | S: stringa argon2id con parametri; NULL finche non attivato |
-| status | text | NN default `pending`, CHECK in (`pending`,`active`,`deactivated`), CHECK `status <> 'active' OR password_hash IS NOT NULL` | "attivazione non consegnata" derivata da `email_log` |
+| email | text | NN, <= 254 | P; not unique |
+| password_hash | text | NULL | S: argon2id string with parameters; NULL until activated |
+| status | text | NN default `pending`, CHECK in (`pending`,`active`,`deactivated`), CHECK `status <> 'active' OR password_hash IS NOT NULL` | "activation not delivered" derived from `email_log` |
 | must_change_password | boolean | NN default false | |
 | password_changed_at, last_login_at, deactivated_at | timestamptz | NULL | |
 
-Indici: `users_username_per_tenant UNIQUE (tenant_id, username) WHERE tenant_id IS NOT NULL`; `users_username_system UNIQUE (username) WHERE tenant_id IS NULL`; `users_one_admin_per_tenant UNIQUE (tenant_id) WHERE role='admin' AND status IN ('pending','active')` (sostituzione: prima disattivare il vecchio, poi inserire il nuovo, nella stessa transazione); `(tenant_id, role, status)` per il conteggio operatori. Nessun contatore di login falliti qui: il blocco usa `rate_limit_buckets` (ADR-0005).
-RLS: `tenant_isolation` con `tenant_id IS NOT NULL AND tenant_id = app_tenant_id()` (le righe systemadmin non sono mai visibili a un tenant) + matrice 4.5.
+Indexes: `users_username_per_tenant UNIQUE (tenant_id, username) WHERE tenant_id IS NOT NULL`; `users_username_system UNIQUE (username) WHERE tenant_id IS NULL`; `users_one_admin_per_tenant UNIQUE (tenant_id) WHERE role='admin' AND status IN ('pending','active')` (replacement: first deactivate the old one, then insert the new one, in the same transaction); `(tenant_id, role, status)` for the operator count. No failed-login counter here: lockout uses `rate_limit_buckets` (ADR-0005).
+RLS: `tenant_isolation` with `tenant_id IS NOT NULL AND tenant_id = app_tenant_id()` (systemadmin rows are never visible to a tenant) + matrix 4.5.
 
 ### 5.6 sessions
 
-| Colonna | Tipo | Vincoli | Note |
+| Column | Type | Constraints | Notes |
 |---|---|---|---|
 | id | uuid | PK | |
 | tenant_id | uuid | NULL, FK | |
 | realm | text | NN, CHECK in (`tenant`,`system`), CHECK `(realm='system') = (tenant_id IS NULL)` | |
-| user_id | uuid | NN, FK `users(id)` NO ACTION; FK composita `(tenant_id, user_id) -> users(tenant_id, id)` (attiva solo se tenant_id non nullo) | sessione e utente nello stesso tenant |
-| token_hash | bytea | NN, U, CHECK `octet_length = 32` | SHA-256 del token a 256 bit; il token non e mai salvato |
-| assurance_level | smallint | NN default 1, CHECK in (1,2) | punto di estensione MFA (ADR-0005) |
-| last_seen_at | timestamptz | NN | aggiornato al massimo una volta al minuto (evita una scrittura per richiesta) |
+| user_id | uuid | NN, FK `users(id)` NO ACTION; composite FK `(tenant_id, user_id) -> users(tenant_id, id)` (active only when tenant_id is not null) | session and user in the same tenant |
+| token_hash | bytea | NN, U, CHECK `octet_length = 32` | SHA-256 of the 256-bit token; the token is never stored |
+| assurance_level | smallint | NN default 1, CHECK in (1,2) | MFA extension point (ADR-0005) |
+| last_seen_at | timestamptz | NN | updated at most once per minute (avoids a write per request) |
 | idle_expires_at, absolute_expires_at | timestamptz | NN | 30 min / 12 h tenant; 15 min / 8 h systemadmin (A-4, SR-SES-07) |
-| user_agent_summary | text | NULL, <= 80 | sintesi grossolana ("Chrome / macOS") per l'elenco sessioni (SR-SES-01/08); nessun IP |
-| password_changed_at (su `users`) | | | la guardia confronta `users.password_changed_at` con `sessions.created_at` (SR-SES-06) |
+| user_agent_summary | text | NULL, <= 80 | coarse summary ("Chrome / macOS") for the session list (SR-SES-01/08); no IP |
+| password_changed_at (on `users`) | | | the guard compares `users.password_changed_at` with `sessions.created_at` (SR-SES-06) |
 
-Revoca = `DELETE` della riga (logout, disattivazione, sospensione, cambio password, sostituzione admin: SR-SES-06); nessun IP salvato, solo la sintesi dello user agent. Indici: `UNIQUE (token_hash)`, `(user_id)` (revoca di tutte le sessioni), `(absolute_expires_at)` (purge giornaliero: elimina le righe scadute/revocate da > 7 giorni).
+Revocation = `DELETE` of the row (logout, deactivation, suspension, password change, admin replacement: SR-SES-06); no IP stored, only the user-agent summary. Indexes: `UNIQUE (token_hash)`, `(user_id)` (revoke all sessions), `(absolute_expires_at)` (daily purge: removes rows expired/revoked for > 7 days).
 
-### 5.7 credential_tokens (link di impostazione password e reset)
+### 5.7 credential_tokens (set-password and reset links)
 
-| Colonna | Tipo | Vincoli | Note |
+| Column | Type | Constraints | Notes |
 |---|---|---|---|
 | id | uuid | PK | |
 | tenant_id | uuid | NULL, FK | |
-| user_id | uuid | NN, FK come per `sessions` | |
+| user_id | uuid | NN, FK as for `sessions` | |
 | purpose | text | NN, CHECK in (`activation`,`password_reset`) | |
-| token_hash | bytea | NN, U, `octet_length = 32` | SHA-256; token a 256 bit |
-| expires_at | timestamptz | NN | 24 h attivazione, 60 min reset |
+| token_hash | bytea | NN, U, `octet_length = 32` | SHA-256; 256-bit token |
+| expires_at | timestamptz | NN | 24 h activation, 60 min reset |
 | used_at, superseded_at | timestamptz | NULL | |
-| created_by_user_id | uuid | NULL, FK users | chi ha emesso il link |
+| created_by_user_id | uuid | NULL, FK users | who issued the link |
 
-Indice: `credential_tokens_one_live UNIQUE (user_id, purpose) WHERE used_at IS NULL AND superseded_at IS NULL` (riemettere invalida il precedente: prima `superseded_at`, poi insert). Consumo atomico, nella stessa transazione che imposta la password:
+Index: `credential_tokens_one_live UNIQUE (user_id, purpose) WHERE used_at IS NULL AND superseded_at IS NULL` (re-issuing invalidates the previous one: first `superseded_at`, then insert). Atomic consumption, in the same transaction that sets the password:
 `UPDATE credential_tokens SET used_at = now() WHERE token_hash = $1 AND used_at IS NULL AND superseded_at IS NULL AND expires_at > now() RETURNING user_id`.
-Retention: purge giornaliero a 7 giorni da scadenza/uso.
+Retention: daily purge 7 days after expiry/use.
 
 ### 5.8 vehicles
 
-| Colonna | Tipo | Vincoli | Note |
+| Column | Type | Constraints | Notes |
 |---|---|---|---|
 | id | uuid | PK, U `(tenant_id, id)` | |
 | tenant_id | uuid | NN, FK | |
-| name | text | NN, 1..120 | ordinamento naturale in app (poche decine di righe) |
+| name | text | NN, 1..120 | natural sorting in the app (a few dozen rows) |
 | plate | text | NN, <= 20 | |
-| plate_normalized | text | generata: `upper(regexp_replace(plate,'[^A-Za-z0-9]','','g'))` STORED | |
+| plate_normalized | text | generated: `upper(regexp_replace(plate,'[^A-Za-z0-9]','','g'))` STORED | |
 | make, model | text | NN, <= 80 | |
 | category | text | NN, CHECK in (`city`,`compact`,`sedan`,`suv`,`van`,`convertible`,`luxury`,`other`) | A-20 |
 | fuel_type | text | NN, CHECK in (`petrol`,`diesel`,`hybrid`,`plug_in_hybrid`,`electric`,`lpg_cng`) | |
 | seats | smallint | NN, CHECK 1..20 | |
 | daily_price_minor | bigint | NN, CHECK >= 0 | |
-| status | text | NN default `available`, CHECK in (`available`,`maintenance`) | `rented` derivato |
-| archived_at | timestamptz | NULL | non conta per `max_vehicles` (A-18) |
-| notes | text | NULL, <= 2000 | avviso FR-DAT-01 in UI; P potenziale |
+| status | text | NN default `available`, CHECK in (`available`,`maintenance`) | `rented` derived |
+| archived_at | timestamptz | NULL | does not count toward `max_vehicles` (A-18) |
+| notes | text | NULL, <= 2000 | FR-DAT-01 warning in UI; potential P |
 
-Indici: `UNIQUE (tenant_id, plate_normalized)` (ASSUNZIONE DB-A5: unica anche tra archiviati; la stessa targa in altro tenant e ammessa); `(tenant_id, lower(name))`; parziale `(tenant_id) WHERE archived_at IS NULL` (conteggio limite). FK entranti: `bookings`, `expenses`, `vehicle_photos` impediscono la cancellazione di un veicolo con storico (si archivia).
+Indexes: `UNIQUE (tenant_id, plate_normalized)` (ASSUMPTION DB-A5: unique also among archived; the same plate in another tenant is allowed); `(tenant_id, lower(name))`; partial `(tenant_id) WHERE archived_at IS NULL` (limit count). Incoming FKs: `bookings`, `expenses`, `vehicle_photos` prevent deleting a vehicle with history (it is archived).
 
 ### 5.9 vehicle_photos
 
-| Colonna | Tipo | Vincoli | Note |
+| Column | Type | Constraints | Notes |
 |---|---|---|---|
 | id | uuid | PK | |
-| tenant_id, vehicle_id | uuid | NN; FK composita `(tenant_id, vehicle_id) -> vehicles(tenant_id,id) ON DELETE CASCADE` | |
-| storage_key | text | NN, U | chiave base `tenants/{tenantId}/vehicles/{vehicleId}/{uuid}`; le varianti 480/1280 WebP derivano dal nome |
+| tenant_id, vehicle_id | uuid | NN; composite FK `(tenant_id, vehicle_id) -> vehicles(tenant_id,id) ON DELETE CASCADE` | |
+| storage_key | text | NN, U | base key `tenants/{tenantId}/vehicles/{vehicleId}/{uuid}`; the 480/1280 WebP variants derive from the name |
 | byte_size, width, height | integer | NN, CHECK > 0 | |
-| position | smallint | NN, CHECK 0..9 | il CHECK + unicita impone il massimo di 10 foto (A-23) |
+| position | smallint | NN, CHECK 0..9 | CHECK + uniqueness enforces the maximum of 10 photos (A-23) |
 | is_cover | boolean | NN default false | |
 
-Indici: `UNIQUE (vehicle_id, position) DEFERRABLE INITIALLY DEFERRED` (riordino con scambi); `UNIQUE (vehicle_id) WHERE is_cover`. Gli oggetti nello storage si cancellano dopo il commit; un job di riconciliazione elenca i prefissi per tenant e rimuove gli orfani (bassa priorita).
+Indexes: `UNIQUE (vehicle_id, position) DEFERRABLE INITIALLY DEFERRED` (reordering with swaps); `UNIQUE (vehicle_id) WHERE is_cover`. Storage objects are deleted after commit; a reconciliation job lists the per-tenant prefixes and removes orphans (low priority).
 
 ### 5.10 expenses
 
-| Colonna | Tipo | Vincoli | Note |
+| Column | Type | Constraints | Notes |
 |---|---|---|---|
 | id | uuid | PK | |
-| tenant_id, vehicle_id | uuid | NN; FK composita verso `vehicles` NO ACTION | |
-| expense_date | date | NN | data di calendario del tenant |
+| tenant_id, vehicle_id | uuid | NN; composite FK to `vehicles` NO ACTION | |
+| expense_date | date | NN | tenant calendar date |
 | category | text | NN, CHECK in (`purchase`,`repair`,`maintenance`,`other`) | |
 | amount_minor | bigint | NN, CHECK `> 0` | |
-| description | text | NULL, <= 500 | avviso FR-DAT-01 |
+| description | text | NULL, <= 500 | FR-DAT-01 warning |
 | created_by_user_id | uuid | NULL, FK users | |
 
-Indici: `(tenant_id, expense_date) INCLUDE (vehicle_id, amount_minor)` (ricavi/spese globali per mese, index-only), `(tenant_id, vehicle_id, expense_date)` (per veicolo e FK).
+Indexes: `(tenant_id, expense_date) INCLUDE (vehicle_id, amount_minor)` (global revenue/expenses per month, index-only), `(tenant_id, vehicle_id, expense_date)` (per vehicle and FK).
 
 ### 5.11 customers
 
-| Colonna | Tipo | Vincoli | Privacy / note |
+| Column | Type | Constraints | Privacy / notes |
 |---|---|---|---|
 | id | uuid | PK, U `(tenant_id, id)` | |
 | tenant_id | uuid | NN, FK | |
 | first_name, last_name | text | NN, 1..80 | P |
-| phone | text | NN, CHECK `phone ~ '^\+[1-9][0-9]{6,14}$' OR anonymized_at IS NOT NULL` | P: E.164 normalizzato con `tenants.country_code` |
+| phone | text | NN, CHECK `phone ~ '^\+[1-9][0-9]{6,14}$' OR anonymized_at IS NOT NULL` | P: E.164 normalised with `tenants.country_code` |
 | email | text | NULL, <= 254 | P |
 | anonymized_at | timestamptz | NULL | |
 
-Indici: `UNIQUE (tenant_id, phone)` (de-duplica FR-CUS-03; concorrenza con `INSERT ... ON CONFLICT (tenant_id, phone) DO NOTHING` poi SELECT; i segnaposto anonimi `anon-<id senza trattini>` sono unici per costruzione); `(tenant_id, created_at DESC)`. Nessun campo note cliente (minimizzazione). Stesso telefono in due tenant = due clienti (FR-CUS-08).
+Indexes: `UNIQUE (tenant_id, phone)` (de-duplication FR-CUS-03; concurrency with `INSERT ... ON CONFLICT (tenant_id, phone) DO NOTHING` then SELECT; anonymous placeholders `anon-<id without dashes>` are unique by construction); `(tenant_id, created_at DESC)`. No customer notes field (minimisation). Same phone in two tenants = two customers (FR-CUS-08).
 
 ### 5.12 bookings
 
-| Colonna | Tipo | Vincoli | Privacy / note |
+| Column | Type | Constraints | Privacy / notes |
 |---|---|---|---|
 | id | uuid | PK, U `(tenant_id, id)` | |
 | tenant_id | uuid | NN, FK | |
-| code | text | NN, U `bookings_tenant_code_key (tenant_id, code)`, CHECK `~ '^[0-9A-HJKMNP-TV-Z]{10}$'` | SR-VAL-09 e decisione 5.8 di 08-security: Crockford base32 (32 simboli, senza I,L,O,U), 10 caratteri = 50 bit, CSPRNG; unico **per tenant**, lookup sempre `(tenant_id, code)` (SR-PDF-02); la visualizzazione a gruppi e della UI. Cambia A-12 |
-| vehicle_id | uuid | NN, FK composita `(tenant_id, vehicle_id)` NO ACTION | |
-| customer_id | uuid | NN, FK composita `(tenant_id, customer_id)` NO ACTION | |
-| customer_first_name, customer_last_name | text | NN | P: nomi come inseriti (FR-CUS-03); anonimizzati con il cliente (SR-GDPR-04) |
-| customer_email | text | NULL, <= 254 | P: email indicata per la conferma (puo differire da `customers.email`, mai sovrascritta: ABU-M2-07); azzerata con l'anonimizzazione. Il telefono coincide per costruzione con `customers.phone` (chiave di abbinamento) |
-| start_at, end_at | timestamptz | NN, CHECK `end_at > start_at` | `end_at` = rientro effettivo = data di attribuzione dei ricavi |
-| buffer_minutes | integer | NN default 0, CHECK 0..1440 | istantanea del buffer; vedi 6.2 |
-| blocked_during | tstzrange | NN default `'empty'`, CHECK `NOT isempty(blocked_during)` | gestita **solo** dal trigger `bookings_set_blocked_during`; il default `empty` esiste solo perche Drizzle tratti la colonna come facoltativa; il CHECK garantisce che il trigger sia scattato |
+| code | text | NN, U `bookings_tenant_code_key (tenant_id, code)`, CHECK `~ '^[0-9A-HJKMNP-TV-Z]{10}$'` | SR-VAL-09 and decision 5.8 of 08-security: Crockford base32 (32 symbols, without I,L,O,U), 10 characters = 50 bit, CSPRNG; unique **per tenant**, lookup always `(tenant_id, code)` (SR-PDF-02); grouped display is a UI concern. Changes A-12 |
+| vehicle_id | uuid | NN, composite FK `(tenant_id, vehicle_id)` NO ACTION | |
+| customer_id | uuid | NN, composite FK `(tenant_id, customer_id)` NO ACTION | |
+| customer_first_name, customer_last_name | text | NN | P: names as entered (FR-CUS-03); anonymised with the customer (SR-GDPR-04) |
+| customer_email | text | NULL, <= 254 | P: email given for the confirmation (may differ from `customers.email`, never overwritten: ABU-M2-07); nulled on anonymisation. The phone coincides by construction with `customers.phone` (matching key) |
+| start_at, end_at | timestamptz | NN, CHECK `end_at > start_at` | `end_at` = effective return = revenue attribution date |
+| buffer_minutes | integer | NN default 0, CHECK 0..1440 | buffer snapshot; see 6.1 |
+| blocked_during | tstzrange | NN default `'empty'`, CHECK `NOT isempty(blocked_during)` | managed **only** by trigger `bookings_set_blocked_during`; the `empty` default exists only so Drizzle treats the column as optional; the CHECK guarantees the trigger fired |
 | status | text | NN default `confirmed`, CHECK in (`confirmed`,`active`,`completed`,`cancelled`) | |
 | status_changed_at | timestamptz | NN default now() | |
-| daily_price_minor | bigint | NN, CHECK >= 0 | istantanea (FR-BKG-05) |
+| daily_price_minor | bigint | NN, CHECK >= 0 | snapshot (FR-BKG-05) |
 | billed_days | smallint | NN, CHECK >= 1 | |
-| total_minor | bigint | NN, CHECK >= 0 | nessun CHECK `total = prezzo x giorni`: promozioni future (FR-PUB-12) lo romperebbero; l'autorita e la funzione `pricing()` |
+| total_minor | bigint | NN, CHECK >= 0 | no `total = price x days` CHECK: future promotions (FR-PUB-12) would break it; the authority is the `pricing()` function |
 | payment_method | text | NULL, CHECK in (`card`,`cash`) | |
 | is_paid | boolean | NN default false | |
 | paid_amount_minor | bigint | NN default 0, CHECK >= 0 | |
-| (pagamento) | | CHECK `NOT is_paid OR payment_method IS NOT NULL`; CHECK `is_paid OR paid_amount_minor = 0` | saldo = total - paid, derivato |
+| (payment) | | CHECK `NOT is_paid OR payment_method IS NOT NULL`; CHECK `is_paid OR paid_amount_minor = 0` | balance = total - paid, derived |
 | paid_at | timestamptz | NULL | |
 | source | text | NN, CHECK in (`public`,`admin`) | |
-| notes | text | NULL, <= 2000 | P potenziale; vedi DB-2 |
+| notes | text | NULL, <= 2000 | potential P; see DB-2 |
 | cancelled_at | timestamptz | NULL | |
 | cancel_reason | text | NULL, <= 500 | |
-| (annullo) | | CHECK `(status='cancelled') = (cancelled_at IS NOT NULL)` | |
-| created_by_user_id | uuid | NULL, FK users | NULL = cliente pubblico |
-| idempotency_key | text | NULL, <= 64 | FR-BKG-11; azzerata dal job dopo 48 h (SR-GDPR-05) |
-| version | integer | NN default 1 | blocco ottimistico (FR-BKG-19): `UPDATE ... WHERE id=$1 AND version=$2` |
+| (cancellation) | | CHECK `(status='cancelled') = (cancelled_at IS NOT NULL)` | |
+| created_by_user_id | uuid | NULL, FK users | NULL = public customer |
+| idempotency_key | text | NULL, <= 64 | FR-BKG-11; nulled by the job after 48 h (SR-GDPR-05) |
+| version | integer | NN default 1 | optimistic lock (FR-BKG-19): `UPDATE ... WHERE id=$1 AND version=$2` |
 
-Indici (ognuno ha una query, sezione 7):
+Indexes (each has a query, section 7):
 
-| Indice | Uso |
+| Index | Use |
 |---|---|
-| `bookings_tenant_code_key UNIQUE (tenant_id, code)` | lookup per codice (conferma, PDF), unicita per tenant |
-| `bookings_tenant_idempotency_key UNIQUE (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL` | replay sicuro |
-| `bookings_vehicle_id_blocked_during_excl` (GiST parziale, creato dal vincolo) | doppia prenotazione e ricerca disponibilita |
-| `(tenant_id, start_at DESC)` | elenco prenotazioni, calendario |
-| `(tenant_id, end_at)` | ricavi per mese, calendario futuro |
-| `(tenant_id, vehicle_id, start_at DESC)` | storico veicolo, FK |
-| `(tenant_id, customer_id, start_at DESC)` | storico cliente, limite 3 aperte per telefono, promemoria privacy |
-| `bookings_open_idx (tenant_id, start_at) WHERE status IN ('confirmed','active')` | job transizioni (indice minuscolo) |
+| `bookings_tenant_code_key UNIQUE (tenant_id, code)` | lookup by code (confirmation, PDF), per-tenant uniqueness |
+| `bookings_tenant_idempotency_key UNIQUE (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL` | safe replay |
+| `bookings_vehicle_id_blocked_during_excl` (partial GiST, created by the constraint) | double booking and availability search |
+| `(tenant_id, start_at DESC)` | booking list, calendar |
+| `(tenant_id, end_at)` | revenue per month, future calendar |
+| `(tenant_id, vehicle_id, start_at DESC)` | vehicle history, FK |
+| `(tenant_id, customer_id, start_at DESC)` | customer history, limit of 3 open bookings per phone, privacy reminder |
+| `bookings_open_idx (tenant_id, start_at) WHERE status IN ('confirmed','active')` | transition job (tiny index) |
 
-Trigger: `bookings_set_blocked_during` (BEFORE INSERT OR UPDATE OF start_at,end_at,buffer_minutes), `set_updated_at`.
-Stato effettivo (letto con il tempo, A-25), usato da liste, calendario, ricavi:
+Triggers: `bookings_set_blocked_during` (BEFORE INSERT OR UPDATE OF start_at,end_at,buffer_minutes), `set_updated_at`.
+Effective status (read against time, A-25), used by lists, calendar, revenue:
 ```sql
 CASE WHEN status IN ('confirmed','active') AND end_at <= now() THEN 'completed'
      WHEN status = 'confirmed' AND start_at <= now() THEN 'active'
      ELSE status END
 ```
 
-### 5.13 revenue_year_snapshots e revenue_year_snapshot_rows
+### 5.13 revenue_year_snapshots and revenue_year_snapshot_rows
 
-`revenue_year_snapshots` (testata = totale globale):
+`revenue_year_snapshots` (header = global total):
 
-| Colonna | Tipo | Vincoli | Note |
+| Column | Type | Constraints | Notes |
 |---|---|---|---|
 | id | uuid | PK, U `(tenant_id, id)` | |
 | tenant_id | uuid | NN, FK | |
-| year | smallint | NN | anno nel fuso del tenant |
+| year | smallint | NN | year in the tenant time zone |
 | version | integer | NN, CHECK >= 1 | |
-| currency | char(3) | NN | congelata con i numeri |
+| currency | char(3) | NN | frozen with the numbers |
 | revenue_minor, collected_minor, expenses_minor, net_minor | bigint | NN; CHECK `net_minor = revenue_minor - expenses_minor` | |
 | bookings_count | integer | NN, CHECK >= 0 | |
 | frozen_at | timestamptz | NN | |
 | corrected_at | timestamptz | NULL | |
 | corrected_by_user_id | uuid | NULL, FK users | |
-| reason | text | NULL, <= 300 | es. `expense:created:<id>`, `booking:updated:<code>`, `reconciliation` |
-| (versione) | | CHECK `(version = 1) = (corrected_at IS NULL)`; `UNIQUE (tenant_id, year, version)` | |
+| reason | text | NULL, <= 300 | e.g. `expense:created:<id>`, `booking:updated:<code>`, `reconciliation` |
+| (version) | | CHECK `(version = 1) = (corrected_at IS NULL)`; `UNIQUE (tenant_id, year, version)` | |
 
-`revenue_year_snapshot_rows` (per veicolo): PK `(snapshot_id, vehicle_id)`; `tenant_id`; FK composita `(tenant_id, snapshot_id)` e `(tenant_id, vehicle_id)` NO ACTION; stesse cinque colonne numeriche (revenue, collected, expenses, net, bookings_count). ASSUNZIONE DB-A6: lo snapshot salva solo totali annuali (globale + per veicolo), non il dettaglio mensile (FR-REV-06 confronta anni; il mese si ricalcola dal vivo) — vedi DB-5.
-Immutabilita: ai due oggetti sono concessi solo SELECT/INSERT; la versione n+1 si crea con `pg_advisory_xact_lock(hashtextextended('snapshot:'||tenant_id||':'||year,0))` e l'unicita su `(tenant_id, year, version)` come rete. Ultima versione: `ORDER BY version DESC LIMIT 1` (coperta dall'indice univoco). Somma righe veicolo = riga globale (FR-REV-10): garantita dalla stessa query e verificata da test.
+`revenue_year_snapshot_rows` (per vehicle): PK `(snapshot_id, vehicle_id)`; `tenant_id`; composite FKs `(tenant_id, snapshot_id)` and `(tenant_id, vehicle_id)` NO ACTION; the same five numeric columns (revenue, collected, expenses, net, bookings_count). ASSUMPTION DB-A6: the snapshot stores only yearly totals (global + per vehicle), not the monthly detail (FR-REV-06 compares years; the month is recomputed live) — see DB-5.
+Immutability: only SELECT/INSERT are granted on both objects; version n+1 is created under `pg_advisory_xact_lock(hashtextextended('snapshot:'||tenant_id||':'||year,0))` with uniqueness on `(tenant_id, year, version)` as a safety net. Latest version: `ORDER BY version DESC LIMIT 1` (covered by the unique index). Sum of vehicle rows = global row (FR-REV-10): guaranteed by the same query and verified by a test.
 
 ### 5.14 audit_log
 
-| Colonna | Tipo | Vincoli | Note |
+| Column | Type | Constraints | Notes |
 |---|---|---|---|
-| id | uuid | PK (UUIDv7) | cursore `(created_at, id)` |
-| tenant_id | uuid | NULL, FK | NULL = evento di piattaforma |
+| id | uuid | PK (UUIDv7) | cursor `(created_at, id)` |
+| tenant_id | uuid | NULL, FK | NULL = platform event |
 | created_at | timestamptz | NN default now() | |
 | actor_type | text | NN, CHECK in (`user`,`system`,`public`) | |
 | actor_user_id | uuid | NULL, FK users NO ACTION | |
-| actor_username, actor_role | text | NULL | istantanea (A-39) |
-| action | text | NN | es. `booking.updated` |
+| actor_username, actor_role | text | NULL | snapshot (A-39) |
+| action | text | NN | e.g. `booking.updated` |
 | entity_type | text | NN | `booking`, `payment`, `settings`, `subscription`, `tenant`, `admin_account`, `snapshot`, `customer`, `export` |
 | entity_id | uuid | NULL | |
-| entity_ref | text | NULL | riferimento umano non personale (codice prenotazione) |
-| changes | jsonb | NN default `'{}'`, CHECK `pg_column_size(changes) <= 16384` | `{campo: {old, new}}`; **allowlist per azione** nel codice (`AuditLog.record`): mai nomi/telefoni/email, mai segreti; canary test |
+| entity_ref | text | NULL | non-personal human reference (booking code) |
+| changes | jsonb | NN default `'{}'`, CHECK `pg_column_size(changes) <= 16384` | `{field: {old, new}}`; **per-action allowlist** in code (`AuditLog.record`): never names/phones/emails, never secrets; canary test |
 | request_id | text | NULL | |
 
-Indici: `(tenant_id, created_at DESC, id DESC)` (viewer), `(tenant_id, entity_type, entity_id, created_at DESC)` (storico prenotazione), `BRIN (created_at)` (retention globale).
-Append-only, quattro livelli [V per trigger, privilegi, policy]: (1) grant solo `SELECT, INSERT`; (2) nessuna policy UPDATE/DELETE per `tenant`/sistema; (3) trigger `append_only_guard('24 months')` (funzione generica, parametro = eta minima) BEFORE UPDATE/DELETE e BEFORE TRUNCATE che alza `append-only` anche al proprietario, **salvo** DELETE quando `current_user = 'rentcar_owner'` (cioe dentro le funzioni definer, SR-AUD-03) **e** `app.purge_mode = <tenant_id della riga>` (eliminazione tenant) oppure `= 'retention'` con `OLD.created_at < now() - 24 mesi`; (4) la GUC la impostano solo le funzioni definer, e `rentcar_app` non ha comunque il privilegio DELETE. Valori (SR-AUD-04): identificatori, enumerazioni, numeri, date; per i campi di testo libero solo un marcatore `changed` con la lunghezza. Retention 24 mesi (SR-AUD-05).
+Indexes: `(tenant_id, created_at DESC, id DESC)` (viewer), `(tenant_id, entity_type, entity_id, created_at DESC)` (booking history), `BRIN (created_at)` (global retention).
+Append-only, four levels [V for trigger, privileges, policy]: (1) grant only `SELECT, INSERT`; (2) no UPDATE/DELETE policy for `tenant`/system; (3) trigger `append_only_guard('24 months')` (generic function, parameter = minimum age) BEFORE UPDATE/DELETE and BEFORE TRUNCATE that raises `append-only` even for the owner, **except** DELETE when `current_user = 'rentcar_owner'` (i.e. inside the definer functions, SR-AUD-03) **and** `app.purge_mode = <row's tenant_id>` (tenant deletion) or `= 'retention'` with `OLD.created_at < now() - 24 months`; (4) the GUC is set only by definer functions, and `rentcar_app` has no DELETE privilege anyway. Values (SR-AUD-04): identifiers, enumerations, numbers, dates; for free-text fields only a `changed` marker with the length. Retention 24 months (SR-AUD-05).
 
 ### 5.15 email_log (outbox, ADR-0008; SR-EML-02/06, SR-GDPR-05)
 
-| Colonna | Tipo | Vincoli | Privacy / note |
+| Column | Type | Constraints | Privacy / notes |
 |---|---|---|---|
 | id | uuid | PK | |
-| tenant_id | uuid | NULL, FK | NULL = mail del proprietario (SYSTEM_ADMIN_EMAIL), visibile solo al sistema |
+| tenant_id | uuid | NULL, FK | NULL = owner mail (SYSTEM_ADMIN_EMAIL), visible to the system only |
 | channel | text | NN, CHECK in (`tenant_smtp`,`system_smtp`) | |
-| category | text | NN, CHECK in (`transactional`,`credential`) | `credential` = attivazione, reset, sostituzione admin |
+| category | text | NN, CHECK in (`transactional`,`credential`) | `credential` = activation, reset, admin replacement |
 | template | text | NN | |
-| related_type, related_id | text, uuid | NN | riferimento polimorfico (nessuna FK; l'eliminazione per tenant lo copre) |
-| recipient | text | NULL, <= 254 | P: indirizzo del destinatario; **azzerato (NULL) 90 giorni dopo l'ultimo tentativo** e all'anonimizzazione del cliente (SR-GDPR-04/05); `recipient_scrubbed_at` ne tiene traccia |
+| related_type, related_id | text, uuid | NN | polymorphic reference (no FK; per-tenant deletion covers it) |
+| recipient | text | NULL, <= 254 | P: recipient address; **nulled (NULL) 90 days after the last attempt** and on customer anonymisation (SR-GDPR-04/05); `recipient_scrubbed_at` tracks it |
 | recipient_scrubbed_at | timestamptz | NULL | |
 | status | text | NN default `pending`, CHECK in (`pending`,`sending`,`sent`,`failed`,`abandoned`) | |
-| attempts, max_attempts | smallint | NN default 0 / 5; CHECK `category <> 'credential' OR max_attempts = 1` | **nessun ritentativo automatico per le mail di credenziali** (SR-EML-02): il token in chiaro non e mai salvato (solo l'hash in `credential_tokens`), il messaggio e generato al momento dell'invio e il creatore riemette il link (FR-AUTH-04). Una riga `credential` ancora `pending` dopo 15 min diventa `failed` ("attivazione non consegnata") |
-| next_attempt_at, locked_until, last_attempt_at, sent_at | timestamptz | NULL | `sending` con `locked_until` scaduto torna disponibile (solo `transactional`) |
-| last_error | text | NULL, <= 500 | solo categoria grossolana, ripulita (SR-SSRF-05) |
+| attempts, max_attempts | smallint | NN default 0 / 5; CHECK `category <> 'credential' OR max_attempts = 1` | **no automatic retry for credential emails** (SR-EML-02): the plaintext token is never stored (only the hash in `credential_tokens`), the message is generated at send time and the creator re-issues the link (FR-AUTH-04). A `credential` row still `pending` after 15 min becomes `failed` ("activation not delivered") |
+| next_attempt_at, locked_until, last_attempt_at, sent_at | timestamptz | NULL | `sending` with expired `locked_until` becomes available again (`transactional` only) |
+| last_error | text | NULL, <= 500 | coarse category only, scrubbed (SR-SSRF-05) |
 
-Il log tiene destinatario, template, stato, categoria e timestamp, **mai** corpo, PDF o token: il PDF si rigenera dall'id della prenotazione a ogni tentativo (SR-EML-06, A-30); un ritentativo risolve l'indirizzo dalla riga collegata se `recipient` fosse gia azzerato (altrimenti `abandoned`). Indici: parziale `(next_attempt_at) WHERE status IN ('pending','failed') AND category = 'transactional'`; `(tenant_id, related_type, related_id)`; `(created_at)` (azzeramento a 90 giorni, cancellazione a 12 mesi). Claim: `SELECT ... FOR UPDATE SKIP LOCKED`; invio fuori dalla transazione DB. Semantica at-least-once (accettata). Tetto di righe per tenant al giorno (SR-EML-05) applicato dal servizio con un conteggio su `(tenant_id, created_at)`.
+The log keeps recipient, template, status, category and timestamps, **never** body, PDF or token: the PDF is regenerated from the booking id at every attempt (SR-EML-06, A-30); a retry resolves the address from the related row if `recipient` was already nulled (otherwise `abandoned`). Indexes: partial `(next_attempt_at) WHERE status IN ('pending','failed') AND category = 'transactional'`; `(tenant_id, related_type, related_id)`; `(created_at)` (nulling at 90 days, deletion at 12 months). Claim: `SELECT ... FOR UPDATE SKIP LOCKED`; send outside the DB transaction. At-least-once semantics (accepted). Per-tenant daily row cap (SR-EML-05) enforced by the service with a count on `(tenant_id, created_at)`.
 
 ### 5.16 job_runs
 
-| Colonna | Tipo | Vincoli | Note |
+| Column | Type | Constraints | Notes |
 |---|---|---|---|
 | id | uuid | PK | |
 | job | text | NN | |
-| tenant_id | uuid | NULL, FK | NULL = job di piattaforma |
-| period_key | text | NN | `2026-11-01T13` (orario), `2026-11-01`, `year:2026`, `sub:<id>:<end_date>` |
+| tenant_id | uuid | NULL, FK | NULL = platform job |
+| period_key | text | NN | `2026-11-01T13` (hourly), `2026-11-01`, `year:2026`, `sub:<id>:<end_date>` |
 | status | text | NN, CHECK in (`succeeded`,`failed`,`skipped`) | |
 | attempt | integer | NN default 1 | |
 | started_at, finished_at | timestamptz | NN | |
 | counts | jsonb | NN default `'{}'` | |
-| error | text | NULL, <= 500 | ripulito |
+| error | text | NULL, <= 500 | scrubbed |
 
-`CREATE UNIQUE INDEX job_runs_idempotency ON job_runs (job, tenant_id, period_key) NULLS NOT DISTINCT` (PG15+). Protocollo senza stato `running` (a prova di crash): in **una** transazione: `INSERT ... ON CONFLICT (job, tenant_id, period_key) DO UPDATE SET attempt = job_runs.attempt + 1, status = 'succeeded', ... WHERE job_runs.status = 'failed'` + lavoro + commit; un secondo chiamante concorrente resta in attesa sull'indice univoco e poi non ottiene righe, quindi salta. Se il lavoro fallisce, rollback e una seconda transazione registra `failed`. Come previsto da SR-JOB-03/ADR-0007 il passo del job prende anche `pg_try_advisory_xact_lock(hashtextextended('job:'||job||':'||period_key,0))` (se non ottenuto: salta). Indice `(started_at DESC)` per la vista del proprietario; retention 12 mesi (SR-GDPR-05).
+`CREATE UNIQUE INDEX job_runs_idempotency ON job_runs (job, tenant_id, period_key) NULLS NOT DISTINCT` (PG15+). Crash-proof protocol with no `running` state: in **one** transaction: `INSERT ... ON CONFLICT (job, tenant_id, period_key) DO UPDATE SET attempt = job_runs.attempt + 1, status = 'succeeded', ... WHERE job_runs.status = 'failed'` + work + commit; a concurrent second caller waits on the unique index and then gets no rows, so it skips. If the work fails, rollback and a second transaction records `failed`. As required by SR-JOB-03/ADR-0007 the job step also takes `pg_try_advisory_xact_lock(hashtextextended('job:'||job||':'||period_key,0))` (if not obtained: skip). Index `(started_at DESC)` for the owner's view; retention 12 months (SR-GDPR-05).
 
-### 5.17 rate_limit_buckets (senza RLS, vedi 4.3)
+### 5.17 rate_limit_buckets (no RLS, see 4.3)
 
-`key text` (HMAC-SHA256 hex di `tenant:scope:identita`, chiave derivata con HKDF, SR-RL-03; 64 caratteri, CHECK; nessun IP in chiaro), `window_start timestamptz`, `count integer NN`, `expires_at timestamptz NN`; PK `(key, window_start)`; indice `(expires_at)`. Upsert: `INSERT ... ON CONFLICT (key, window_start) DO UPDATE SET count = rate_limit_buckets.count + 1 RETURNING count`, eseguibile in un solo round trip. Purge orario: righe con `expires_at < now()` (finestra + 1 h, sempre < 24 h, NFR-GDPR-02). Tabella LOGGED (UNLOGGED non consigliata su Neon: si svuota alla sospensione del compute).
+`key text` (HMAC-SHA256 hex of `tenant:scope:identity`, key derived with HKDF, SR-RL-03; 64 characters, CHECK; no plain IP), `window_start timestamptz`, `count integer NN`, `expires_at timestamptz NN`; PK `(key, window_start)`; index `(expires_at)`. Upsert: `INSERT ... ON CONFLICT (key, window_start) DO UPDATE SET count = rate_limit_buckets.count + 1 RETURNING count`, executable in a single round trip. Hourly purge: rows with `expires_at < now()` (window + 1 h, always < 24 h, NFR-GDPR-02). LOGGED table (UNLOGGED not recommended on Neon: it is emptied when the compute suspends).
 
-### 5.18 Tabelle non create
+### 5.18 Tables not created
 
-Nessuna tabella `notification_markers` (coperta da `job_runs`), nessuna `password_reset_tokens` (coperta da `credential_tokens`), nessuna `tenant_exports` (bastano `export_*` su `tenants`).
+No `notification_markers` table (covered by `job_runs`), no `password_reset_tokens` (covered by `credential_tokens`), no `tenant_exports` (the `export_*` columns on `tenants` are enough).
 
 
-### 5.19 security_event (SR-LOG-03, archivio di piattaforma)
+### 5.19 security_event (SR-LOG-03, platform archive)
 
-| Colonna | Tipo | Vincoli | Note |
+| Column | Type | Constraints | Notes |
 |---|---|---|---|
 | id | uuid | PK | |
 | created_at | timestamptz | NN default now() | |
-| event | text | NN | tassonomia di SR-LOG-03 (`auth.login.failure`, `tenant.mismatch`, `system.context.used`, ...) |
+| event | text | NN | SR-LOG-03 taxonomy (`auth.login.failure`, `tenant.mismatch`, `system.context.used`, ...) |
 | realm | text | NN, CHECK in (`tenant`,`system`,`public`,`job`) | |
-| subject_tenant_id | uuid | NULL | contesto, **senza FK e senza colonna `tenant_id`** |
+| subject_tenant_id | uuid | NULL | context, **no FK and no `tenant_id` column** |
 | actor_id | uuid | NULL | |
-| outcome, reason_code | text | NN / NULL | codici, mai testo di eccezione |
-| ip_prefix | text | NULL | /24 per IPv4, /48 per IPv6 |
-| ip_hmac | text | NULL, 64 | HMAC dell'IP completo con chiave derivata |
+| outcome, reason_code | text | NN / NULL | codes, never exception text |
+| ip_prefix | text | NULL | /24 for IPv4, /48 for IPv6 |
+| ip_hmac | text | NULL, 64 | HMAC of the full IP with a derived key |
 | request_id | text | NULL | |
 
-Nessun IP completo ne dato personale. Append-only (`append_only_guard('12 months')`), INSERT da qualunque scope, SELECT solo scope `system` (SR-AUD-02). Indici: `(created_at DESC)`, `(event, created_at DESC)`. Retention 12 mesi (SR-GDPR-05) via `purge_expired_records()`.
+No full IP nor personal data. Append-only (`append_only_guard('12 months')`), INSERT from any scope, SELECT only in scope `system` (SR-AUD-02). Indexes: `(created_at DESC)`, `(event, created_at DESC)`. Retention 12 months (SR-GDPR-05) via `purge_expired_records()`.
 
 ### 5.20 platform_audit (SR-AUD-02)
 
-`id`, `created_at`, `actor_user_id` (FK `users`, il systemadmin), `action` (`tenant.created|suspended|terminated|hard_deleted`, `admin.reset|replaced`, `subscription.*`), `subject_tenant_id` (senza FK), `entity_ref`, `changes jsonb` (stesse regole di 5.14), `request_id`. Solo scope `system` (e `bootstrap`/`job`/funzioni definer in INSERT); append-only con `append_only_guard('never')` (retention 6 anni o durata del contratto: nessuna cancellazione automatica, SR-AUD-05). Nessun dato personale: solo id.
+`id`, `created_at`, `actor_user_id` (FK `users`, the systemadmin), `action` (`tenant.created|suspended|terminated|hard_deleted`, `admin.reset|replaced`, `subscription.*`), `subject_tenant_id` (no FK), `entity_ref`, `changes jsonb` (same rules as 5.14), `request_id`. Only scope `system` (and `bootstrap`/`job`/definer functions for INSERT); append-only with `append_only_guard('never')` (retention 6 years or contract life: no automatic deletion, SR-AUD-05). No personal data: ids only.
 
 ### 5.21 slug_tombstone (SR-ACC-07, SR-GDPR-07)
 
-`slug text PK`, `subject_tenant_id uuid NN`, `reserved_until timestamptz NN` (= eliminazione + 12 mesi), `created_at`. Scritta dalla funzione di eliminazione; la creazione di un tenant (trigger `tenants_slug_not_tombstoned`) e la risoluzione dello slug la consultano: slug riservato, sconosciuto o in tombstone danno lo stesso 404 generico. Le righe scadute le rimuove `purge_expired_records()`.
+`slug text PK`, `subject_tenant_id uuid NN`, `reserved_until timestamptz NN` (= deletion + 12 months), `created_at`. Written by the deletion function; tenant creation (trigger `tenants_slug_not_tombstoned`) and slug resolution consult it: a reserved, unknown or tombstoned slug gives the same generic 404. Expired rows are removed by `purge_expired_records()`.
 
 ### 5.22 deletion_ledger (SR-GDPR-08)
 
-`id uuid PK`, `kind text CHECK in ('customer_anonymised','tenant_hard_deleted')`, `subject_tenant_id uuid NN`, `subject_customer_id uuid NULL` (CHECK: obbligatorio per `customer_anonymised`), `occurred_at timestamptz NN`. Solo id e date, nessun dato personale. Append-only (`append_only_guard('never')`), INSERT dalla transazione di anonimizzazione (scope `tenant`: ammesso con `subject_tenant_id = app_tenant_id()`) e dalla funzione di eliminazione. Poiche un restore riporta il database indietro nel tempo, **il registro vive anche fuori dal DB**: il workflow di backup ne esporta le righe degli ultimi 35 giorni, cifrate con `age`, nel bucket dei dump (sezione 10). Il replay dopo un restore esegue di nuovo anonimizzazioni (idempotente) ed eliminazioni.
+`id uuid PK`, `kind text CHECK in ('customer_anonymised','tenant_hard_deleted')`, `subject_tenant_id uuid NN`, `subject_customer_id uuid NULL` (CHECK: mandatory for `customer_anonymised`), `occurred_at timestamptz NN`. Ids and dates only, no personal data. Append-only (`append_only_guard('never')`), INSERT from the anonymisation transaction (scope `tenant`: allowed with `subject_tenant_id = app_tenant_id()`) and from the deletion function. Because a restore takes the database back in time, **the ledger also lives outside the DB**: the backup workflow exports the rows of the last 35 days, encrypted with `age`, to the dump bucket (section 10). The replay after a restore executes anonymisations (idempotent) and deletions again.
 
 ---
 
-## 6. Doppia prenotazione e codice prenotazione
+## 6. Double booking and booking code
 
-### 6.1 Vincolo (ADR-0004, verificato [V] su PostgreSQL 16.15)
+### 6.1 Constraint (ADR-0004, verified [V] on PostgreSQL 16.15)
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS btree_gist;
@@ -648,25 +648,25 @@ CREATE TRIGGER bookings_blocked_during BEFORE INSERT OR UPDATE OF start_at, end_
   ON bookings FOR EACH ROW EXECUTE FUNCTION bookings_set_blocked_during();
 ```
 
-- **Filtro di stato**: `status <> 'cancelled'`. Tutte le transizioni tra `confirmed`/`active`/`completed` non toccano il vincolo; annullare libera il veicolo subito; una modifica che porta una prenotazione fuori da `cancelled` non esiste (annullata e finale). Le query di lettura devono contenere letteralmente `status <> 'cancelled'` perche il planner usi l'indice parziale.
-- **Estremi**: intervalli semiaperti, `end_at` uguale a `start_at` successivo con buffer 0 = ammesso [V per buffer 60: 10:30 rifiutato 23P01, 11:00 accettato].
-- **Buffer**: ogni prenotazione porta il buffer in vigore alla sua creazione. Quindi "buffer" = tempo di rimessa a posto *dopo* il rientro di ciascuna prenotazione. Se tutte le prenotazioni hanno lo stesso `b` coincide con A-22 (simmetrico); se il tenant cambia buffer, le prenotazioni esistenti non cambiano (AS-3). Ad una **modifica** di date/veicolo il buffer si ricalcola con quello corrente del tenant (ASSUNZIONE, DB-4).
-- **Errori da mappare**: `23P01` -> `BookingConflict`. Inoltre `40P01` (deadlock) e `40001` -> un solo retry, che poi vedra il vincitore e dara `23P01`. In 60 inserimenti paralleli identici ho osservato 59 x `23P01` e nessun `40P01` [V], ma il deadlock tra inserimenti incrociati non e escluso dal motore [NV]: lo spike S5 deve provarlo con e senza lock.
-- **Serializzazione consigliata** (cintura e bretelle): prima di insert/update su prenotazioni, `pg_advisory_xact_lock(hashtextextended('veh:'||vehicle_id,0))` per ogni veicolo coinvolto **in ordine di id crescente** (modifica con cambio veicolo: vecchio e nuovo). Il vincolo resta la garanzia non aggirabile; il lock elimina deadlock e attese incrociate. Solo lock transazionali (ADR-0010).
-- **Idempotenza**: `INSERT ... ON CONFLICT (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING RETURNING`; se non torna nulla si legge la riga esistente. Distinguere i `23505` dal nome del vincolo (`bookings_tenant_code_key` vs idempotenza).
+- **Status filter**: `status <> 'cancelled'`. All transitions between `confirmed`/`active`/`completed` do not touch the constraint; cancelling frees the vehicle immediately; a change that takes a booking out of `cancelled` does not exist (cancelled is final). Read queries must literally contain `status <> 'cancelled'` so the planner uses the partial index.
+- **Endpoints**: half-open intervals, `end_at` equal to the next `start_at` with buffer 0 = allowed [V for buffer 60: 10:30 rejected 23P01, 11:00 accepted].
+- **Buffer**: each booking carries the buffer in force when it was created. So "buffer" = tidy-up time *after* each booking's return. If all bookings have the same `b` it coincides with A-22 (symmetric); if the tenant changes the buffer, existing bookings do not change (AS-3). On an **edit** of dates/vehicle the buffer is recomputed with the tenant's current one (ASSUMPTION, DB-4).
+- **Errors to map**: `23P01` -> `BookingConflict`. Also `40P01` (deadlock) and `40001` -> a single retry, which will then see the winner and give `23P01`. In 60 identical parallel inserts I observed 59 x `23P01` and no `40P01` [V], but a deadlock between crossing inserts is not ruled out by the engine [NV]: spike S5 must prove it with and without the lock.
+- **Recommended serialisation** (belt and braces): before insert/update on bookings, `pg_advisory_xact_lock(hashtextextended('veh:'||vehicle_id,0))` for each vehicle involved **in ascending id order** (edit with vehicle change: old and new). The constraint remains the unbypassable guarantee; the lock removes deadlocks and crossing waits. Transaction-level locks only (ADR-0010).
+- **Idempotency**: `INSERT ... ON CONFLICT (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING RETURNING`; if nothing is returned the existing row is read. Tell `23505`s apart by constraint name (`bookings_tenant_code_key` vs idempotency).
 
-### 6.2 Codice prenotazione (decisione 5.8 di 08-security, SR-VAL-09, PB-04)
+### 6.2 Booking code (decision 5.8 of 08-security, SR-VAL-09, PB-04)
 
-- Formato: 10 caratteri dall'alfabeto Crockford base32 `0123456789ABCDEFGHJKMNPQRSTVWXYZ` (32 simboli) = **50 bit**, generati con CSPRNG e campionamento senza bias (32 e potenza di 2: si usano 5 bit per carattere). Mai sequenziale. CHECK DB `^[0-9A-HJKMNP-TV-Z]{10}$`. Unico per tenant (`UNIQUE (tenant_id, code)`), lookup sempre `(tenant_id, code)`: nessun oracolo di esistenza tra tenant e coerente con la route `/{slug}/...`.
-- Collisioni: insert con retry (max 5) su `23505` del vincolo `bookings_tenant_code_key`.
-- **Scostamento dai requisiti**: A-12 prevedeva 8 caratteri, 31 simboli (39,6 bit) e unicita globale; NFR-SEC-07 chiede >= 40 bit. La decisione di sicurezza (50 bit, perche il codice e una *capability* per PDF e pagina di conferma, UX-7) sostituisce A-12: da aggiornare nei requisiti. Con 32 simboli compaiono `0` e `1`: l'input utente va normalizzato (`O->0`, `I,L->1`) come nello standard Crockford.
-- La pagina di conferma e il PDF non devono mostrare telefono/email completi; le ricerche per codice sono a rate limit (SR-RL-01, SR-PDF-02).
+- Format: 10 characters from the Crockford base32 alphabet `0123456789ABCDEFGHJKMNPQRSTVWXYZ` (32 symbols) = **50 bit**, generated with a CSPRNG and unbiased sampling (32 is a power of 2: 5 bits per character). Never sequential. DB CHECK `^[0-9A-HJKMNP-TV-Z]{10}$`. Unique per tenant (`UNIQUE (tenant_id, code)`), lookup always `(tenant_id, code)`: no existence oracle across tenants, consistent with the `/{slug}/...` route.
+- Collisions: insert with retry (max 5) on `23505` of constraint `bookings_tenant_code_key`.
+- **Deviation from requirements**: A-12 foresaw 8 characters, 31 symbols (39.6 bit) and global uniqueness; NFR-SEC-07 asks >= 40 bit. The security decision (50 bit, because the code is a *capability* for the PDF and the confirmation page, UX-7) replaces A-12: to be updated in the requirements. With 32 symbols `0` and `1` appear: user input must be normalised (`O->0`, `I,L->1`) as in the Crockford standard.
+- The confirmation page and the PDF must not show the full phone/email; lookups by code are rate limited (SR-RL-01, SR-PDF-02).
 
 ---
 
-## 7. Query critiche, indici e ricavi
+## 7. Critical queries, indexes and revenue
 
-### 7.1 Disponibilita pubblica (NFR-PERF-02: p95 <= 500 ms con 50 veicoli, 5.000 prenotazioni)
+### 7.1 Public availability (NFR-PERF-02: p95 <= 500 ms with 50 vehicles, 5,000 bookings)
 
 ```sql
 -- $1 tenant, $2 pickup, $3 return + current tenant buffer (computed in the app)
@@ -678,13 +678,13 @@ WHERE v.tenant_id = $1 AND v.archived_at IS NULL AND v.status = 'available'
     WHERE b.vehicle_id = v.id AND b.status <> 'cancelled'
       AND b.blocked_during && tstzrange($2, $3, '[)'));
 ```
-Usa l'indice GiST dell'esclusione (ricerca per `vehicle_id` + sovrapposizione). Il conflitto da mostrare in modifica (US-141) usa la stessa predicata con `AND b.id <> $self` e restituisce `code`.
+It uses the exclusion's GiST index (lookup by `vehicle_id` + overlap). The conflict to show on edit (US-141) uses the same predicate with `AND b.id <> $self` and returns `code`.
 
-### 7.2 Calendario (NFR-PERF-04) e liste
+### 7.2 Calendar (NFR-PERF-04) and lists
 
-`vehicles` del tenant ordinati in app + `bookings WHERE tenant_id=$1 AND start_at < $range_end AND end_at > $range_start` (indice `(tenant_id, end_at)`). Elenco prenotazioni: paginazione keyset `(start_at, id) < ($a, $b)` con filtri status (stato effettivo, 5.12), intervallo e veicolo; indice `(tenant_id, start_at DESC)`. Se un tenant supera ~50.000 prenotazioni si valuta un indice GiST su `(tenant_id, tstzrange(start_at,end_at))`: non ora.
+The tenant's `vehicles` sorted in the app + `bookings WHERE tenant_id=$1 AND start_at < $range_end AND end_at > $range_start` (index `(tenant_id, end_at)`). Booking list: keyset pagination `(start_at, id) < ($a, $b)` with status filters (effective status, 5.12), range and vehicle; index `(tenant_id, start_at DESC)`. If a tenant exceeds ~50,000 bookings, a GiST index on `(tenant_id, tstzrange(start_at,end_at))` is considered: not now.
 
-### 7.3 Job di transizione (idempotente)
+### 7.3 Transition job (idempotent)
 
 ```sql
 UPDATE bookings SET status = 'completed', status_changed_at = now()
@@ -692,11 +692,11 @@ UPDATE bookings SET status = 'completed', status_changed_at = now()
 UPDATE bookings SET status = 'active', status_changed_at = now()
  WHERE tenant_id = $1 AND status = 'confirmed' AND start_at <= now();
 ```
-(Ordine: prima `completed`.) Mai all'indietro, mai su `cancelled` e il vincolo di esclusione non viene toccato. Usa `bookings_open_idx`.
+(Order: `completed` first.) Never backwards, never on `cancelled`, and the exclusion constraint is not touched. Uses `bookings_open_idx`.
 
-### 7.4 Ricavi per mese, per veicolo e globali (FR-REV-01/02/10, NFR-PERF-05)
+### 7.4 Revenue per month, per vehicle and global (FR-REV-01/02/10, NFR-PERF-05)
 
-Ricavo = prenotazioni **effettivamente completate** per `end_at` (anche se il job non e girato: RK-9), mese nel fuso del tenant:
+Revenue = **effectively completed** bookings by `end_at` (even if the job has not run: RK-9), month in the tenant time zone:
 
 ```sql
 -- $1 tenant, $2 year
@@ -721,213 +721,213 @@ FROM (
 ) x
 GROUP BY GROUPING SETS ((vehicle_id, month), (month), (vehicle_id), ());
 ```
-Una sola scansione produce per-veicolo/mese, globale/mese, totale per veicolo e totale generale: per costruzione la somma dei veicoli e il globale (FR-REV-10). I limiti `end_at >= y_start` sono sargable su `(tenant_id, end_at)`. Netto = ricavi - spese; "incassato" = `paid_amount_minor`; "da incassare" = ricavo - incassato. Un booking che finisce il 31/12 alle 23:30 locali cade in dicembre (US-081) perche il confronto usa gli istanti di inizio/fine anno locali.
+A single scan produces per-vehicle/month, global/month, per-vehicle total and grand total: by construction the sum of the vehicles is the global figure (FR-REV-10). The `end_at >= y_start` bounds are sargable on `(tenant_id, end_at)`. Net = revenue - expenses; "collected" = `paid_amount_minor`; "outstanding" = revenue - collected. A booking ending 31/12 at 23:30 local falls in December (US-081) because the comparison uses the local start/end-of-year instants.
 
-### 7.5 Snapshot annuali e versioni (REQ-4, FR-REV-05/07)
+### 7.5 Yearly snapshots and versions (REQ-4, FR-REV-05/07)
 
-- Anno "chiuso" = ora locale del tenant >= 1 gennaio dell'anno successivo. Creazione v1: job giornaliero + creazione pigra: `INSERT ... ON CONFLICT (tenant_id, year, version) DO NOTHING` (esattamente una v1 anche con job doppio o rilanciato, US-084).
-- **Correzione**: nella stessa transazione della modifica (spesa/prenotazione completata) per ogni anno chiuso toccato (anno vecchio e nuovo se `end_at` cambia anno): (1) **prima** della modifica, se per quell'anno non esiste alcuna v1, crearla dallo stato precedente (altrimenti la v1 nascerebbe gia corretta e si perderebbe la traccia); (2) applicare la modifica; (3) ricalcolare con la query 7.4; (4) se i totali differiscono dall'ultima versione, inserire versione n+1 (`corrected_at`, `corrected_by_user_id`, `reason`) sotto l'advisory lock; se uguali non crea nulla (US-085 ultimo scenario).
-- **Riconciliazione notturna** (`snapshot_reconcile`, idempotente): ricalcola gli anni chiusi e, se trova differenza con l'ultima versione (modifica fatta da un percorso dimenticato o SQL manuale), crea una versione con `reason='reconciliation'`. Alternativa scartata: trigger sulle tabelle sorgente (complessita e dipendenza dal fuso, stessi risultati con 24 h di ritardo massimo).
-- Confronto tra anni: ultima versione di ciascun anno (`DISTINCT ON (year) ... ORDER BY year, version DESC`), badge "corrected" se `version > 1`.
+- "Closed" year = tenant local time >= 1 January of the following year. v1 creation: daily job + lazy creation: `INSERT ... ON CONFLICT (tenant_id, year, version) DO NOTHING` (exactly one v1 even with a doubled or re-run job, US-084).
+- **Correction**: in the same transaction as the change (expense/completed booking) for every closed year touched (old and new year if `end_at` changes year): (1) **before** the change, if no v1 exists for that year, create it from the previous state (otherwise v1 would be born already corrected and the trace would be lost); (2) apply the change; (3) recompute with query 7.4; (4) if the totals differ from the latest version, insert version n+1 (`corrected_at`, `corrected_by_user_id`, `reason`) under the advisory lock; if equal, create nothing (US-085 last scenario).
+- **Nightly reconciliation** (`snapshot_reconcile`, idempotent): recomputes the closed years and, if it finds a difference with the latest version (change made through a forgotten path or manual SQL), creates a version with `reason='reconciliation'`. Discarded alternative: triggers on the source tables (complexity and time-zone dependency, same results with at most 24 h delay).
+- Year comparison: latest version of each year (`DISTINCT ON (year) ... ORDER BY year, version DESC`), "corrected" badge if `version > 1`.
 
-### 7.6 Altre query
+### 7.6 Other queries
 
-| Query | Indice |
+| Query | Index |
 |---|---|
-| Validazione sessione: `sessions JOIN users` per `token_hash`, non revocata, scadenze > now() | `UNIQUE (token_hash)` |
-| Limite 3 prenotazioni aperte per telefono | `customers (tenant_id, phone)` + `(tenant_id, customer_id, start_at DESC)` |
-| Promemoria privacy (clienti senza prenotazioni da 24 mesi) | `NOT EXISTS` su `(tenant_id, customer_id, start_at DESC)` con `end_at > now() - 24 months` |
-| Viewer audit | `(tenant_id, created_at DESC, id DESC)` |
+| Session validation: `sessions JOIN users` by `token_hash`, not revoked, expiries > now() | `UNIQUE (token_hash)` |
+| Limit of 3 open bookings per phone | `customers (tenant_id, phone)` + `(tenant_id, customer_id, start_at DESC)` |
+| Privacy reminder (customers with no bookings for 24 months) | `NOT EXISTS` on `(tenant_id, customer_id, start_at DESC)` with `end_at > now() - 24 months` |
+| Audit viewer | `(tenant_id, created_at DESC, id DESC)` |
 | Rate limit | PK `(key, window_start)` |
-| Conteggio limiti piano | indici parziali `vehicles`, `users (tenant_id, role, status)` |
+| Plan limit count | partial indexes `vehicles`, `users (tenant_id, role, status)` |
 
 ---
 
-## 8. Migrazioni e seed
+## 8. Migrations and seed
 
-### 8.1 Strumenti e flusso
+### 8.1 Tools and flow
 
-- `drizzle-kit generate` crea le migrazioni SQL dallo schema TS (`modules/*/infrastructure/schema.ts`); `drizzle-kit generate --custom --name=...` crea il file vuoto per ci che Drizzle non modella (estensioni, esclusione, trigger, funzioni, **tutta la RLS e le policy**, grant, indici parziali/GiST). La RLS e solo in SQL a mano (Drizzle `pgPolicy` non copre `FORCE` ne le policy per ruolo): una sola fonte di verita.
-- Una commit per task = schema TS + migrazione generata + migrazione custom + test (03b §15). Mai modificare una migrazione applicata: se ne crea una nuova.
-- **Nome file**: `NNNN_<modulo>_<cambiamento>.sql`, es. `0001_tenancy_core.sql` (generata), `0002_tenancy_rls_constraints.sql` (custom). Intestazione obbligatoria `-- generated by drizzle-kit` oppure `-- custom: <perche>`.
-- **Runner** `scripts/migrate.ts`: usa `DIRECT_DATABASE_URL` (ruolo `rentcar_migrator`, poi `SET ROLE rentcar_owner`), `SET lock_timeout='5s'`, `pg_advisory_lock` di sessione (ammesso solo qui, connessione diretta), migrazioni di Drizzle, poi **verifiche post-migrazione** (catalogo RLS, policy, grant, indici FK; le stesse del test di CI) e rilascio del lock. Compose: servizio `migrate` one-shot, `app` con `depends_on: migrate: service_completed_successfully` (AC1); produzione: passo di CI prima della promozione del deploy (ADR-0002).
-- **Ruoli e DB** fuori da Drizzle (SR-DB-01): `scripts/db-bootstrap.sql` (idempotente) eseguito da `rentcar_admin`: ruoli (owner, migrator, app, backup), database, `CREATE EXTENSION btree_gist` (anche `IF NOT EXISTS` nella `0000`), `REVOKE` su `public`. Compose lo esegue nell'init del container; in produzione una volta, da runbook.
-- **Reversibilita**: Drizzle e solo "avanti". Politica: ogni migrazione di *espansione* ha `drizzle/rollback/NNNN_name.down.sql` (ignorato dal migratore) e un test CI "su -> giu -> su" su database vuoto; le migrazioni di *contrazione* (drop/rename) sono dichiarate irreversibili e il vero rollback e il ripristino (dump pre-migrazione, sezione 10). Dump `pg_dump` mirato prima di ogni migrazione con la riga `-- destructive`.
-- **Migrazioni nella stessa transazione** [NV]: se il migratore esegue tutte le pendenti in una sola transazione, niente `CREATE INDEX CONCURRENTLY` e niente `ALTER TYPE ADD VALUE` seguito da uso. A questa scala (tabelle < 10^6 righe) i lock durano millisecondi; `lock_timeout` fa fallire la migrazione invece di bloccare il traffico.
-- **Espansione/contrazione** (serverless: vecchia e nuova versione convivono): rilascio N solo additivo (colonne nullable o con default, nuove tabelle, nuovi indici, `CHECK ... NOT VALID` poi `VALIDATE`), backfill in script idempotente (loop per tenant con `withTenant`, o migrazione custom come `rentcar_owner`), passaggio del codice, rilascio N+1 con NOT NULL/drop. Rinomina = aggiungi nuova, doppia scrittura, sposta, rimuovi. Ogni nuova tabella di tenant porta RLS+grant+FK composite nella **stessa** migrazione.
-- **Controlli CI**: (a) migrazioni da zero su database pulito con ruoli reali; (b) `drizzle-kit generate` non deve produrre differenze (schema TS == oggetti modellati); (c) test di catalogo: RLS abilitata e forzata ovunque tranne l'eccezione, policy `owner_all`/`backup_read`/`tenant_isolation`, grant == matrice 4.4, ogni FK ha indice, nessuna vista senza `security_invoker`, nessun `SECURITY DEFINER` fuori elenco, `search_path` fissato nelle funzioni definer; (d) su/giu/su; (e) smoke con connessione pooled e diretta.
-- Piano iniziale (allineato a M1-M4): `0000_platform_foundations` (estensione, helper, trigger `set_updated_at`, `rls_baseline`, revoke), `0001/0002 tenancy` (tenants, settings, smtp, subscriptions), `0003/0004 auth` (users, sessions, credential_tokens), `0005 platform_ops` (audit_log + guard + funzioni di purge, job_runs, email_log, rate_limit_buckets), `0006/0007 fleet` (vehicles, photos), `0008/0009 customers_bookings` (+ esclusione, trigger), `0010/0011 finance` (expenses, snapshots).
+- `drizzle-kit generate` creates the SQL migrations from the TS schema (`modules/*/infrastructure/schema.ts`); `drizzle-kit generate --custom --name=...` creates the empty file for what Drizzle does not model (extensions, exclusion, triggers, functions, **all RLS and policies**, grants, partial/GiST indexes). RLS is hand-written SQL only (Drizzle `pgPolicy` does not cover `FORCE` nor per-role policies): a single source of truth.
+- One commit per task = TS schema + generated migration + custom migration + tests (03b §15). Never modify an applied migration: create a new one.
+- **File name**: `NNNN_<module>_<change>.sql`, e.g. `0001_tenancy_core.sql` (generated), `0002_tenancy_rls_constraints.sql` (custom). Mandatory header `-- generated by drizzle-kit` or `-- custom: <why>`.
+- **Runner** `scripts/migrate.ts`: uses `DIRECT_DATABASE_URL` (role `rentcar_migrator`, then `SET ROLE rentcar_owner`), `SET lock_timeout='5s'`, session-level `pg_advisory_lock` (allowed only here, direct connection), Drizzle migrations, then **post-migration checks** (RLS catalog, policies, grants, FK indexes; the same as the CI test) and lock release. Compose: one-shot `migrate` service, `app` with `depends_on: migrate: service_completed_successfully` (AC1); production: CI step before promoting the deployment (ADR-0002).
+- **Roles and DB** outside Drizzle (SR-DB-01): `scripts/db-bootstrap.sql` (idempotent) run by `rentcar_admin`: roles (owner, migrator, app, backup), database, `CREATE EXTENSION btree_gist` (also `IF NOT EXISTS` in `0000`), `REVOKE` on `public`. Compose runs it in the container init; in production once, from a runbook.
+- **Reversibility**: Drizzle is "forward only". Policy: every *expand* migration has `drizzle/rollback/NNNN_name.down.sql` (ignored by the migrator) and a CI "up -> down -> up" test on an empty database; *contract* migrations (drop/rename) are declared irreversible and the real rollback is restore (pre-migration dump, section 10). A targeted `pg_dump` before every migration carrying the `-- destructive` line.
+- **Migrations in the same transaction** [NV]: if the migrator runs all pending ones in a single transaction, no `CREATE INDEX CONCURRENTLY` and no `ALTER TYPE ADD VALUE` followed by use. At this scale (tables < 10^6 rows) locks last milliseconds; `lock_timeout` makes the migration fail instead of blocking traffic.
+- **Expand/contract** (serverless: old and new versions coexist): release N additive only (nullable columns or with default, new tables, new indexes, `CHECK ... NOT VALID` then `VALIDATE`), backfill in an idempotent script (loop per tenant with `withTenant`, or a custom migration as `rentcar_owner`), code switch, release N+1 with NOT NULL/drop. Rename = add new, double write, move, remove. Every new tenant table carries RLS+grants+composite FKs in the **same** migration.
+- **CI checks**: (a) migrations from scratch on a clean database with real roles; (b) `drizzle-kit generate` must produce no diff (TS schema == modelled objects); (c) catalog tests: RLS enabled and forced everywhere except the exception, `owner_all`/`backup_read`/`tenant_isolation` policies, grants == matrix 4.4, every FK has an index, no view without `security_invoker`, no `SECURITY DEFINER` outside the list, `search_path` pinned in definer functions; (d) up/down/up; (e) smoke with pooled and direct connection.
+- Initial plan (aligned with M1-M4): `0000_platform_foundations` (extension, helpers, trigger `set_updated_at`, `rls_baseline`, revoke), `0001/0002 tenancy` (tenants, settings, smtp, subscriptions), `0003/0004 auth` (users, sessions, credential_tokens), `0005 platform_ops` (audit_log + guard + purge functions, job_runs, email_log, rate_limit_buckets), `0006/0007 fleet` (vehicles, photos), `0008/0009 customers_bookings` (+ exclusion, trigger), `0010/0011 finance` (expenses, snapshots).
 
 ### 8.2 Seed
 
-- **Sviluppo** (`seed` profile di Compose; rifiuta `APP_ENV` staging/production, FR-PLT-02): crea un systemadmin con `SEED_SYSTEMADMIN_USERNAME`, `SYSTEM_ADMIN_EMAIL`, `SEED_SYSTEMADMIN_PASSWORD` (nomi proposti; confermano backend/security), password hashata con argon2id al volo, stato `active`, idempotente (`ON CONFLICT DO NOTHING` sull'indice systemadmin). Come da SR-DB-10 i seed sono solo dev e usano il ruolo migrator (`SET ROLE rentcar_owner`), non il runtime.
-- **Dati demo/E2E**: tenant sintetici `demo-a` e `demo-b` con dati *gemelli* (stessi username, targhe, telefoni, date) piu un tenant vuoto e uno terminato, generati dai builder deterministici (`FakeClock`, id sequenziali); mai contengono dati reali.
-- **Produzione** (A-33): `scripts/create-systemadmin.ts` legge username/email da env, crea l'utente in stato `pending` e un `credential_token` di attivazione; il link viene inviato con SMTP di sistema e, se l'invio fallisce, stampato una sola volta su stdout. Nessuna password in env. Esegue con `scope='bootstrap'` (runtime role). ASSUNZIONE DB-A8 da confermare con il security-engineer (A-33 parla di "valori d'ambiente"; AU-11 vuole il CLI una tantum).
-- Migrazione da sistemi esistenti: nessuna (greenfield, requisiti 6.3).
+- **Development** (Compose `seed` profile; refuses `APP_ENV` staging/production, FR-PLT-02): creates a systemadmin with `SEED_SYSTEMADMIN_USERNAME`, `SYSTEM_ADMIN_EMAIL`, `SEED_SYSTEMADMIN_PASSWORD` (proposed names; backend/security to confirm), password hashed with argon2id on the fly, status `active`, idempotent (`ON CONFLICT DO NOTHING` on the systemadmin index). As per SR-DB-10 seeds are dev-only and use the migrator role (`SET ROLE rentcar_owner`), not the runtime.
+- **Demo/E2E data**: synthetic tenants `demo-a` and `demo-b` with *twin* data (same usernames, plates, phones, dates) plus an empty tenant and a terminated one, generated by deterministic builders (`FakeClock`, sequential ids); they never contain real data.
+- **Production** (A-33): `scripts/create-systemadmin.ts` reads username/email from env, creates the user in `pending` status and an activation `credential_token`; the link is sent via the system SMTP and, if sending fails, printed once on stdout. No password in env. Runs with `scope='bootstrap'` (runtime role). ASSUMPTION DB-A8 to confirm with the security-engineer (A-33 speaks of "environment values"; AU-11 wants the one-off CLI).
+- Migration from existing systems: none (greenfield, requirements 6.3).
 
 ---
 
-## 9. Dati personali, retention e ciclo di vita
+## 9. Personal data, retention and lifecycle
 
-### 9.1 Classificazione
+### 9.1 Classification
 
-| Dato | Tabella.colonna | Classe | Trattamento |
+| Data | Table.column | Class | Handling |
 |---|---|---|---|
-| Nome, cognome, telefono, email cliente | `customers.*`, `bookings.customer_first_name/last_name/email` | Personale | minimizzazione (solo questi campi), niente documenti/carte (SEC-5), anonimizzazione, export |
-| Note libere | `vehicles.notes`, `bookings.notes`, `expenses.description` | Potenzialmente personale | avviso in UI, lunghezza limitata; `bookings.notes` azzerate con l'anonimizzazione (DB-2) |
-| Username, nome, email staff | `users.*` | Personale (lavoratori) | conservati finche il tenant esiste; cancellati con il tenant |
-| Hash password, hash token | `users.password_hash`, `sessions/credential_tokens.token_hash` | Segreto | argon2id / SHA-256; esclusi dal dump: sessioni e token |
-| Password SMTP | `tenant_smtp_configs.password_enc` | Segreto | AES-256-GCM, chiave fuori dal DB |
-| Indirizzo destinatario email | `email_log.recipient` | Personale | azzerato a 90 giorni dall'ultimo tentativo e all'anonimizzazione (SR-GDPR-05); mai nelle mail di credenziali oltre l'indirizzo; nessun corpo salvato |
-| IP | mai in chiaro: solo prefisso + HMAC in `security_event` (12 mesi); solo HMAC in `rate_limit_buckets` (<= 24 h) | Pseudonimo | SR-LOG-03, SR-RL-03 |
-| Audit | `audit_log`, `platform_audit`, `security_event`, `deletion_ledger` | Identificativi, nessuna PII oltre id/codici | 24 mesi / 6 anni / 12 mesi / 6 anni |
+| Customer first name, last name, phone, email | `customers.*`, `bookings.customer_first_name/last_name/email` | Personal | minimisation (only these fields), no documents/cards (SEC-5), anonymisation, export |
+| Free notes | `vehicles.notes`, `bookings.notes`, `expenses.description` | Potentially personal | UI warning, limited length; `bookings.notes` cleared on anonymisation (DB-2) |
+| Staff username, name, email | `users.*` | Personal (workers) | kept while the tenant exists; deleted with the tenant |
+| Password hash, token hash | `users.password_hash`, `sessions/credential_tokens.token_hash` | Secret | argon2id / SHA-256; excluded from the dump: sessions and tokens |
+| SMTP password | `tenant_smtp_configs.password_enc` | Secret | AES-256-GCM, key outside the DB |
+| Email recipient address | `email_log.recipient` | Personal | nulled 90 days after the last attempt and on anonymisation (SR-GDPR-05); never in credential emails beyond the address; no body stored |
+| IP | never in clear: only prefix + HMAC in `security_event` (12 months); only HMAC in `rate_limit_buckets` (<= 24 h) | Pseudonymous | SR-LOG-03, SR-RL-03 |
+| Audit | `audit_log`, `platform_audit`, `security_event`, `deletion_ledger` | Identifiers, no PII beyond ids/codes | 24 months / 6 years / 12 months / 6 years |
 
 ### 9.2 Retention
 
-| Dato | Conservazione | Meccanismo |
+| Data | Retention | Mechanism |
 |---|---|---|
-| Clienti e prenotazioni | finche il tenant esiste o anonimizza; promemoria annuale (FR-CUS-09), nessuna cancellazione automatica | job di gennaio |
-| `audit_log` (24 mesi), `security_event` (12 mesi), `slug_tombstone` (alla scadenza) | come indicato (SR-AUD-05, SR-GDPR-05) | job orario/giornaliero `purge_expired_records()` (funzione definer che imposta `app.purge_mode='retention'`) |
-| `platform_audit`, `deletion_ledger` | 6 anni o durata del contratto, solo id | nessuna cancellazione automatica |
-| `email_log` | destinatario azzerato a 90 giorni, riga cancellata a 12 mesi (SR-GDPR-05) | job giornaliero scope `job` |
-| chiavi di idempotenza (`bookings.idempotency_key`) | 48 ore | job orario per tenant |
-| `job_runs` | 12 mesi | job giornaliero |
-| `rate_limit_buckets` | <= 24 h (di fatto finestra + 1 h) | job orario |
-| `sessions`, `credential_tokens` | 7 giorni dopo scadenza/uso (le sessioni revocate si cancellano subito) | job giornaliero |
-| Snapshot | finche il tenant esiste | - |
-| Tenant terminato | 90 giorni poi eliminazione (9.3); resta il tombstone | procedura systemadmin |
-| Backup | 30 giorni (<= 35, A-31) | lifecycle del bucket |
-| Log applicativi | <= 30 giorni | OPS |
+| Customers and bookings | while the tenant exists or anonymises; yearly reminder (FR-CUS-09), no automatic deletion | January job |
+| `audit_log` (24 months), `security_event` (12 months), `slug_tombstone` (at expiry) | as indicated (SR-AUD-05, SR-GDPR-05) | hourly/daily job `purge_expired_records()` (definer function that sets `app.purge_mode='retention'`) |
+| `platform_audit`, `deletion_ledger` | 6 years or contract life, ids only | no automatic deletion |
+| `email_log` | recipient nulled at 90 days, row deleted at 12 months (SR-GDPR-05) | daily job, scope `job` |
+| idempotency keys (`bookings.idempotency_key`) | 48 hours | hourly per-tenant job |
+| `job_runs` | 12 months | daily job |
+| `rate_limit_buckets` | <= 24 h (in practice window + 1 h) | hourly job |
+| `sessions`, `credential_tokens` | 7 days after expiry/use (revoked sessions are deleted immediately) | daily job |
+| Snapshots | while the tenant exists | - |
+| Terminated tenant | 90 days then deletion (9.3); the tombstone remains | systemadmin procedure |
+| Backups | 30 days (<= 35, A-31) | bucket lifecycle |
+| Application logs | <= 30 days | OPS |
 
-### 9.3 Cicli di vita
+### 9.3 Lifecycles
 
-**Anonimizzazione cliente** (FR-CUS-06, una transazione `withTenant`): (1) rifiuta se ha prenotazioni *effettivamente* confermate/attive; (2) `customers`: nome `Anonymised`/`Customer`, `phone = 'anon-' || replace(id::text,'-','')` (valore casuale derivato dall'uuid, mai un hash o un troncamento del dato originale: SR-GDPR-04), `email = NULL`, `anonymized_at = now()`; (3) `bookings` del cliente: nomi come sopra, `customer_email = NULL`, `notes = NULL` (DB-2); (4) `email_log` collegati (via `related_id` delle prenotazioni e dei token): `recipient = NULL`; (5) riga audit `customer.anonymised` (solo id) e riga in `deletion_ledger`. Test: ricerca dei valori originali in **tutte** le tabelle (e nello storage). Importi, date e ricavi restano. Nei backup il dato esiste fino a 30 giorni (poi sparisce) e il **registro delle cancellazioni** (sotto) permette di rifarla dopo un restore.
+**Customer anonymisation** (FR-CUS-06, one `withTenant` transaction): (1) refuse if the customer has *effectively* confirmed/active bookings; (2) `customers`: name `Anonymised`/`Customer`, `phone = 'anon-' || replace(id::text,'-','')` (random value derived from the uuid, never a hash or truncation of the original data: SR-GDPR-04), `email = NULL`, `anonymized_at = now()`; (3) the customer's `bookings`: names as above, `customer_email = NULL`, `notes = NULL` (DB-2); (4) linked `email_log` rows (via `related_id` of bookings and tokens): `recipient = NULL`; (5) audit row `customer.anonymised` (id only) and a row in `deletion_ledger`. Test: search for the original values in **all** tables (and in storage). Amounts, dates and revenue remain. In backups the data exists for up to 30 days (then disappears) and the **deletion ledger** (below) allows redoing it after a restore.
 
-**Export cliente** (FR-CUS-07): letture parametrizzate `customers` + `bookings`, audit `export`. **Export tenant** (FR-SYS-16): CSV a cursore dalle tabelle, in `tenants/{id}/exports/`; consegna registrata in `export_delivered_at`.
+**Customer export** (FR-CUS-07): parameterised reads of `customers` + `bookings`, audit `export`. **Tenant export** (FR-SYS-16): cursor-based CSV from the tables, in `tenants/{id}/exports/`; delivery recorded in `export_delivered_at`.
 
-**Terminazione ed eliminazione tenant** (SEC-7, US-066, SR-GDPR-06/07):
-1. Giorno 0 (scope `system`): `status='terminated'`, `terminated_at`, `deletion_due_at = +90 giorni`; sessioni del tenant cancellate; accesso bloccato; riga `platform_audit`.
-2. L'export del tenant lo produce un job in scope `tenant` (mai una lettura di sistema); consegna registrata in `export_delivered_at`.
-3. Promemoria prima della scadenza (job `J` sull'indice parziale).
-4. Giorno >= 90, la UI richiede lo slug digitato e la password del systemadmin: l'app cancella prima i prefissi dello storage (`tenants/{id}/`, `private/{id}/`) e verifica che siano vuoti, poi chiama `purge_tenant_data(tenant_id)`.
-5. `purge_tenant_data` (`SECURITY DEFINER`, proprietario `rentcar_owner`, `SET search_path = pg_catalog, public`, `REVOKE ... FROM PUBLIC`, `EXECUTE` a `rentcar_app`): rifiuta se non `app_scope() = 'system'`, se `status <> 'terminated'`, se `deletion_due_at > now()` (i 90 giorni non si aggirano) o se manca sia `export_delivered_at` sia `deletion_override_reason`; imposta `app.purge_mode`; scopre da `pg_class`/`pg_attribute` tutte le tabelle con colonna `tenant_id` e le svuota **in ordine topologico delle FK** (foglie per prime, errore se ciclo; l'elenco e generato dal catalogo e confrontato in un test); rinomina lo slug del tenant in `deleted-<id>` e lo inserisce in `slug_tombstone` (12 mesi); porta `tenants` a `deleted` (nome `deleted-<id>`); inserisce `platform_audit` (`tenant.hard_deleted`) e `deletion_ledger` (`tenant_hard_deleted`), e `security_event` e scritto dall'app (`tenant.hard_deleted`). Provata [V] (versione di base): cancellate 4 righe di un tenant, l'altro intatto, chiamata con scope sbagliato rifiutata. Test permanente: dopo la funzione, zero righe in **ogni** tabella con `tenant_id`.
-6. Resta il tombstone in `tenants` (id, stato, date, nome/slug neutralizzati). `security_event`, `platform_audit` e il registro non contengono dati dei clienti e seguono la loro retention (da citare nel DPA).
+**Tenant termination and deletion** (SEC-7, US-066, SR-GDPR-06/07):
+1. Day 0 (scope `system`): `status='terminated'`, `terminated_at`, `deletion_due_at = +90 days`; tenant sessions deleted; access blocked; `platform_audit` row.
+2. The tenant export is produced by a job in scope `tenant` (never a system read); delivery recorded in `export_delivered_at`.
+3. Reminder before the deadline (job `J` on the partial index).
+4. Day >= 90, the UI requires the typed slug and the systemadmin password: the app first deletes the storage prefixes (`tenants/{id}/`, `private/{id}/`) and verifies they are empty, then calls `purge_tenant_data(tenant_id)`.
+5. `purge_tenant_data` (`SECURITY DEFINER`, owner `rentcar_owner`, `SET search_path = pg_catalog, public`, `REVOKE ... FROM PUBLIC`, `EXECUTE` to `rentcar_app`): refuses if not `app_scope() = 'system'`, if `status <> 'terminated'`, if `deletion_due_at > now()` (the 90 days cannot be bypassed) or if both `export_delivered_at` and `deletion_override_reason` are missing; sets `app.purge_mode`; discovers from `pg_class`/`pg_attribute` all tables with a `tenant_id` column and empties them **in FK topological order** (leaves first, error on a cycle; the list is generated from the catalog and compared in a test); renames the tenant's slug to `deleted-<id>` and inserts it into `slug_tombstone` (12 months); moves `tenants` to `deleted` (name `deleted-<id>`); inserts `platform_audit` (`tenant.hard_deleted`) and `deletion_ledger` (`tenant_hard_deleted`), while `security_event` is written by the app (`tenant.hard_deleted`). Proven [V] (basic version): 4 rows of one tenant deleted, the other intact, call with the wrong scope refused. Permanent test: after the function, zero rows in **every** table with `tenant_id`.
+6. The tombstone remains in `tenants` (id, status, dates, neutralised name/slug). `security_event`, `platform_audit` and the ledger contain no customer data and follow their own retention (to be cited in the DPA).
 
-**Registro delle cancellazioni e restore** (SR-GDPR-08): vedi 5.22 e 10. Anonimizzazioni ed eliminazioni sono ripetibili (idempotenti) cosi il replay dopo un ripristino da backup/PITR non puo far risorgere dati cancellati; i backup scadono entro 35 giorni e il DPA lo dichiara.
+**Deletion ledger and restore** (SR-GDPR-08): see 5.22 and 10. Anonymisations and deletions are repeatable (idempotent) so the replay after a restore from backup/PITR cannot bring deleted data back; backups expire within 35 days and the DPA states it.
 
 ---
 
-## 10. Backup e ripristino
+## 10. Backup and restore
 
-| Aspetto | Decisione |
+| Aspect | Decision |
 |---|---|
-| Frequenza | notturno (GitHub Actions, ADR-0010) + PITR del provider se presente (Neon Launch 7 giorni) |
-| Comando | `pg_dump -Fc --enable-row-security --no-owner --exclude-table-data=sessions --exclude-table-data=credential_tokens --exclude-table-data=rate_limit_buckets` con `BACKUP_DATABASE_URL` (connessione diretta, ruolo `rentcar_backup`) [V: anche senza BYPASSRLS il ruolo legge tutto grazie a `backup_read`; con BYPASSRLS il comportamento e lo stesso]. Il workflow esporta inoltre `deletion_ledger` degli ultimi 35 giorni (`COPY ... TO` o CSV) cifrato con `age` nello stesso bucket |
-| Cifratura | `age -r <chiave pubblica>` sul runner; chiave privata custodita fuori da GitHub (CSM-2); la KEK `APP_ENCRYPTION_KEY` mai nello stesso posto dei dump |
-| Destinazione/retention | bucket di un **provider diverso**, regola di ciclo di vita a 30 giorni; nome `rentcar-<UTC>.dump.age` + checksum |
-| RPO / RTO | RPO <= 24 h col solo dump (minuti con PITR); RTO <= 4 h obiettivo (NFR-BKP-01 chiede <= 24 h); database stimato < 1 GB, ripristino in minuti |
-| Restore | in un database nuovo con ruoli gia presenti: `pg_restore --no-owner --role=rentcar_owner -d <db>` (collegato come `rentcar_migrator`); **provato [V]**: con `FORCE RLS`, trigger, policy ed esclusione il ripristino come proprietario riesce perche dati prima, RLS/policy/trigger dopo (post-data), e i grant sono ripristinati |
-| Verifica post-restore (SR-DB-09, ABU-M6-06) | script `verify-restore`: **conteggi di riga per tabella confrontati con la sorgente** (un dump filtrato dalla RLS darebbe zeri), FK valide, esclusione ricostruita, suite di catalogo RLS/grant, login di prova, e **replay obbligatorio del registro delle cancellazioni** (passo bloccante del runbook di restore e di ogni ripristino PITR) |
-| Test | prima del go-live e poi trimestrale (NFR-BKP-01), in un database di prova (Compose o ramo del provider), con esito archiviato |
-| Pre-migrazione | dump mirato (o punto di ripristino del provider) prima di ogni migrazione `-- destructive` |
-| Costo | GitHub Actions entro i minuti gratuiti; storage dei dump: 30 copie x (<= 250 MB compressi nel caso massimo) = pochi euro/mese al massimo (stima, non verificata col prezzo del bucket scelto) |
+| Frequency | nightly (GitHub Actions, ADR-0010) + provider PITR if present (Neon Launch 7 days) |
+| Command | `pg_dump -Fc --enable-row-security --no-owner --exclude-table-data=sessions --exclude-table-data=credential_tokens --exclude-table-data=rate_limit_buckets` with `BACKUP_DATABASE_URL` (direct connection, role `rentcar_backup`) [V: even without BYPASSRLS the role reads everything thanks to `backup_read`; with BYPASSRLS the behaviour is the same]. The workflow also exports `deletion_ledger` of the last 35 days (`COPY ... TO` or CSV) encrypted with `age` into the same bucket |
+| Encryption | `age -r <public key>` on the runner; private key held outside GitHub (CSM-2); the `APP_ENCRYPTION_KEY` KEK never in the same place as the dumps |
+| Destination/retention | bucket at a **different provider**, 30-day lifecycle rule; name `rentcar-<UTC>.dump.age` + checksum |
+| RPO / RTO | RPO <= 24 h with the dump alone (minutes with PITR); RTO <= 4 h target (NFR-BKP-01 asks <= 24 h); database estimated < 1 GB, restore in minutes |
+| Restore | into a new database with roles already present: `pg_restore --no-owner --role=rentcar_owner -d <db>` (connected as `rentcar_migrator`); **proven [V]**: with `FORCE RLS`, triggers, policies and exclusion constraint, restoring as owner works because data comes first and RLS/policies/triggers after (post-data), and grants are restored |
+| Post-restore check (SR-DB-09, ABU-M6-06) | `verify-restore` script: **per-table row counts compared with the source** (a dump filtered by RLS would show zeros), valid FKs, exclusion rebuilt, RLS/grant catalog suite, test login, and **mandatory replay of the deletion ledger** (blocking step of the restore runbook and of every PITR recovery) |
+| Test | before go-live and then quarterly (NFR-BKP-01), in a test database (Compose or provider branch), with the result archived |
+| Pre-migration | targeted dump (or provider restore point) before every `-- destructive` migration |
+| Cost | GitHub Actions within free minutes; dump storage: 30 copies x (<= 250 MB compressed in the worst case) = a few euros/month at most (estimate, not verified against the chosen bucket's price) |
 
-Rischi collegati: il job fallisce in silenzio (nessun alerting, D14) -> serve l'heartbeat via email del workflow (CSM-1, ambito OPS); se il restore come proprietario non riuscisse su un provider (P3/P5), ripetere con un ruolo con `BYPASSRLS`/superuser del provider.
+Related risks: the job fails silently (no alerting, D14) -> the workflow's email heartbeat is needed (CSM-1, OPS scope); if restore as owner failed on a provider (P3/P5), repeat with a provider `BYPASSRLS`/superuser role.
 
 ---
 
-## 11. Volumi e crescita
+## 11. Volumes and growth
 
-Ipotesi: dimensione riga media 400 B per prenotazione (indici x2), audit 350 B, 4 eventi di audit per prenotazione.
+Assumptions: average row size 400 B per booking (indexes x2), audit 350 B, 4 audit events per booking.
 
-| Scenario | Prenotazioni/anno | Audit a regime (24 mesi) | Dimensione stimata |
+| Scenario | Bookings/year | Audit at steady state (24 months) | Estimated size |
 |---|---|---|---|
-| Atteso anno 1 (10 tenant x 25 veicoli x 60 prenotazioni) | 15.000 | ~120.000 righe | ~50 MB |
-| Tetto di progetto (50 tenant x 50 veicoli x 80 prenotazioni) | 200.000 | ~1,6 milioni | ~1 GB totale (prenotazioni ~250 MB/anno con indici, audit ~560 MB) |
+| Expected year 1 (10 tenants x 25 vehicles x 60 bookings) | 15,000 | ~120,000 rows | ~50 MB |
+| Design ceiling (50 tenants x 50 vehicles x 80 bookings) | 200,000 | ~1.6 million | ~1 GB total (bookings ~250 MB/year with indexes, audit ~560 MB) |
 
-Nessun partizionamento (soglia di rivalutazione: `audit_log` > 20 milioni di righe o `bookings` > 5 milioni). Il tetto per tenant del test di carico: 50 veicoli, 10.000 prenotazioni (NFR-PERF-05); `seed:perf` genera il dataset (50 tenant) e il test controlla con `EXPLAIN` che le query 7.1/7.4 usino gli indici attesi. Autovacuum di default basta (`bookings` e `sessions` sono le sole tabelle con molti UPDATE); `sessions.last_seen_at` aggiornato al massimo 1/min riduce il rumore.
-
----
-
-## 12. Strategia dei dati di test (matrice cross-tenant)
-
-Allineata a 03b §14 (template DB con le migrazioni reali, connessione col ruolo runtime).
-
-1. **Fixture gemelle**: builder deterministici creano tenant A e B con gli stessi username, targhe, telefoni, nomi e date; un tenant C vuoto (rileva fughe verso insiemi vuoti), un tenant D terminato e un utente systemadmin. I dati sono caricati nel template come `rentcar_owner`, i test girano come `rentcar_app`.
-2. **Registro da catalogo**: la lista delle tabelle con `tenant_id` si legge da `information_schema`; il test fallisce se una non e nella matrice (e se non e in `MIXED_TABLES` con policy esplicite).
-3. **Per ogni tabella e per i due tenant** (generato): (a) senza GUC -> 0 righe; (b) GUC A -> esattamente le righe di A; (c) INSERT con `tenant_id` di B sotto A -> `42501`; (d) UPDATE/DELETE di un id di B sotto A -> 0 righe; (e) come owner: inserimento prenotazione di A con veicolo di B -> `23503` (FK composita) [V].
-4. **Matrice dei tipi di sistema** (4.5): per ogni (tipo, tabella, comando) l'esito atteso e confrontato con `pg_policies`; un tipo non dichiarato deve ottenere 0 righe/`42501`.
-5. **Append-only** su `audit_log`, `security_event`, `platform_audit`, `deletion_ledger`, snapshot (ABU-M0-07): UPDATE/DELETE/TRUNCATE come app -> `42501`; come owner senza GUC -> eccezione del trigger [V]; DELETE valido solo dentro le funzioni definer.
-5b. **Ruolo runtime** (ABU-M0-01): non superuser, non proprietario di tabelle/funzioni, senza BYPASSRLS ne CREATE; snapshot dei grant == matrice 4.4 (ABU-M0-08); pool `max=1`: dopo commit, rollback ed errore la GUC e vuota e nessuna riga e visibile (ABU-M0-04).
-5c. **Email di credenziali**: dopo l'invio non esiste alcun token, link o corpo in `email_log`, `job_runs`, audit, log (canary, ABU-M0-15); `max_attempts = 1`.
-6. **Esclusione**: 50 inserimenti e 50 modifiche paralleli -> un vincitore (con e senza advisory lock, conteggio dei `40P01`); casi limite: estremi uguali, buffer 60, annullata esclusa, modifica con cambio veicolo.
-7. **Purge** (ABU-M6-01): tenant attivo / terminato da 30 giorni / da 91 giorni / slug sbagliato / come admin di tenant -> rifiutato, rifiutato, riuscito, rifiutato, 403; dopo l'eliminazione zero righe con `tenant_id = A` ovunque, conteggi di B invariati, tombstone, `slug_tombstone`, `platform_audit` e `deletion_ledger` presenti. **Restore** (ABU-M6-06): conteggi uguali alla sorgente e replay del registro.
-8. **Bleed GUC**: 1.000 transazioni interleaved su 3 tenant con pool piccolo (spike S1 come test permanente, volume ridotto in CI); verifica anche `current_setting('app.tenant_id', true)` vuoto dopo il commit.
-9. **Integrazione job/outbox**: idempotenza di `job_runs`, credenziali mai ritentate, snapshot v1 unica, versione n+1 solo se i totali cambiano.
-10. **Performance**: dataset `seed:perf`, esecuzione notturna.
+No partitioning (re-evaluation threshold: `audit_log` > 20 million rows or `bookings` > 5 million). The per-tenant ceiling of the load test: 50 vehicles, 10,000 bookings (NFR-PERF-05); `seed:perf` generates the dataset (50 tenants) and the test checks with `EXPLAIN` that queries 7.1/7.4 use the expected indexes. Default autovacuum is enough (`bookings` and `sessions` are the only tables with many UPDATEs); `sessions.last_seen_at` updated at most once per minute reduces noise.
 
 ---
 
-## 13. Audit e monitoraggio del database
+## 12. Test data strategy (cross-tenant matrix)
 
-Eventi di audit sensibili elencati nel dizionario (5.14) coincidono con FR-AUD-01; azioni DB privilegiate (ruoli, DDL) non sono in `audit_log`: sono tracciate dai log del provider/CI (la credenziale owner si usa solo in CI). Metriche (pannello del proprietario e/o log, accordo con l'observability-engineer, nessun alerting): connessioni usate vs limite e transazioni idle-in-transaction; deadlock (`pg_stat_database.deadlocks`) e conteggio applicativo `booking_conflict_total` (23P01) e `40P01`; durata query > 500 ms (log applicativo; `pg_stat_statements` dove disponibile); dimensione di `audit_log`, `email_log`, `bookings`; `email_log` in `pending/failed` piu vecchie di 1 h; `job_runs` fallite; eta dell'ultimo backup (heartbeat OPS); tuple morte/autovacuum; tempo di cold start del compute (Neon).
+Aligned with 03b §14 (template DB with the real migrations, connection with the runtime role).
+
+1. **Twin fixtures**: deterministic builders create tenants A and B with the same usernames, plates, phones, names and dates; an empty tenant C (detects leaks into empty sets), a terminated tenant D and a systemadmin user. Data is loaded into the template as `rentcar_owner`, tests run as `rentcar_app`.
+2. **Catalog registry**: the list of tables with `tenant_id` is read from `information_schema`; the test fails if one is not in the matrix (and not in `MIXED_TABLES` with explicit policies).
+3. **For each table and for the two tenants** (generated): (a) without GUC -> 0 rows; (b) GUC A -> exactly A's rows; (c) INSERT with B's `tenant_id` under A -> `42501`; (d) UPDATE/DELETE of a B id under A -> 0 rows; (e) as owner: inserting a booking of A with a vehicle of B -> `23503` (composite FK) [V].
+4. **System scope matrix** (4.5): for each (scope, table, command) the expected outcome is compared with `pg_policies`; an undeclared scope must get 0 rows/`42501`.
+5. **Append-only** on `audit_log`, `security_event`, `platform_audit`, `deletion_ledger`, snapshots (ABU-M0-07): UPDATE/DELETE/TRUNCATE as app -> `42501`; as owner without GUC -> trigger exception [V]; DELETE valid only inside the definer functions.
+5b. **Runtime role** (ABU-M0-01): not superuser, not owner of tables/functions, without BYPASSRLS nor CREATE; grant snapshot == matrix 4.4 (ABU-M0-08); pool `max=1`: after commit, rollback and error the GUC is empty and no row is visible (ABU-M0-04).
+5c. **Credential emails**: after sending, no token, link or body exists in `email_log`, `job_runs`, audit, logs (canary, ABU-M0-15); `max_attempts = 1`.
+6. **Exclusion**: 50 parallel inserts and 50 parallel edits -> one winner (with and without advisory lock, `40P01` count); edge cases: equal endpoints, buffer 60, cancelled excluded, edit with vehicle change.
+7. **Purge** (ABU-M6-01): active tenant / terminated 30 days ago / 91 days ago / wrong slug / as tenant admin -> refused, refused, succeeds, refused, 403; after deletion zero rows with `tenant_id = A` everywhere, B's counts unchanged, tombstone, `slug_tombstone`, `platform_audit` and `deletion_ledger` present. **Restore** (ABU-M6-06): counts equal to the source and ledger replay.
+8. **GUC bleed**: 1,000 interleaved transactions over 3 tenants with a small pool (spike S1 as a permanent test, reduced volume in CI); also checks `current_setting('app.tenant_id', true)` is empty after commit.
+9. **Job/outbox integration**: `job_runs` idempotency, credentials never retried, a single v1 snapshot, version n+1 only if totals change.
+10. **Performance**: `seed:perf` dataset, nightly run.
 
 ---
 
-## 14. Impatti su altri documenti
+## 13. Audit and database monitoring
 
-| Documento | Modifica richiesta | Responsabile |
+The sensitive audit events listed in the dictionary (5.14) coincide with FR-AUD-01; privileged DB actions (roles, DDL) are not in `audit_log`: they are tracked by provider/CI logs (the owner credential is used only in CI). Metrics (owner's panel and/or logs, agreed with the observability-engineer, no alerting): connections used vs limit and idle-in-transaction transactions; deadlocks (`pg_stat_database.deadlocks`) and application counts `booking_conflict_total` (23P01) and `40P01`; query duration > 500 ms (application log; `pg_stat_statements` where available); size of `audit_log`, `email_log`, `bookings`; `email_log` rows in `pending/failed` older than 1 h; failed `job_runs`; age of the last backup (OPS heartbeat); dead tuples/autovacuum; compute cold-start time (Neon).
+
+---
+
+## 14. Impact on other documents
+
+| Document | Requested change | Owner |
 |---|---|---|
-| ADR-0003 | policy con `NULLIF(current_setting(...,true),'')::uuid` [V del guasto]; `app.scope='system'` sostituito da `app.scope` + matrice 4.5 | solution-architect |
-| 03b §7 e TD-4 | `withSystem(actor)` imposta `app.scope`/`app.actor_id` (non `app.system_actor`); lo scope ha 5 valori (`resolve`, `system_auth`, `system`, `job`, `bootstrap`); la funzione si chiama `withSystemTx(purpose)` in SR-DB-05; TD-4 chiuso con questo documento | solution-architect |
-| ADR-0004 | mappare anche `40P01`/`40001`; advisory lock per veicolo; semantica del buffer "dopo il rientro" e ricalcolo alla modifica | solution-architect |
-| ADR-0002 | "reversibili": politica forward-only + file `rollback/` (8.1); migrazioni a cura del ruolo `rentcar_owner` | solution-architect |
-| ADR-0008 | `email_log` senza corpo ne token; mail di credenziali mai ritentate (`category='credential'`, `max_attempts=1`); destinatario azzerato a 90 giorni | solution-architect, security-engineer |
-| Requisiti A-12 / NFR-SEC-07 | codice prenotazione: 10 caratteri Crockford (50 bit), unico per tenant (decisione 5.8 di 08-security) invece di 8 caratteri/31 simboli/globale | requirements-analyst |
-| 08-security SR-DB-01 | backup role: BYPASSRLS dove concesso, altrimenti policy `backup_read` (equivalente, provata); `rentcar_owner` NOLOGIN + `rentcar_migrator` | security-engineer |
-| 08-security SR-AUD-03 | trigger append-only richiede owner **e** GUC (piu severo); funzione unica `purge_expired_records()` | security-engineer |
-| 08-security SR-GDPR-05 | `EmailLog`: destinatario salvato e azzerato a 90 giorni (invece di non salvarlo: scelta precedente di questo documento, ritirata) | security-engineer |
-| Requisiti FR-SYS-07 | lo stato `expired` e solo derivato (gia scritto), nel DB solo `active/cancelled` | requirements-analyst |
-| Requisiti 6.1 | campi tenant aggiunti: `country_code`, `dpa_signed_at`, `short_description`, indirizzo, `og_image_key`, titolo max 45; "contatori di login falliti" non nel DB (ADR-0005) | requirements-analyst |
-| Spec §9 | indice `Booking(vehicleId,startAt,endAt)` sostituito dall'esclusione GiST | - |
-| 08-security / 09-seo | conferma pagina di conferma come capability link (UX-7); `og_image_key` rigenerata a ogni cambio logo | security-engineer, seo-specialist |
+| ADR-0003 | policy with `NULLIF(current_setting(...,true),'')::uuid` [V of the failure]; `app.scope='system'` replaced by `app.scope` + matrix 4.5 | solution-architect |
+| 03b §7 and TD-4 | `withSystem(actor)` sets `app.scope`/`app.actor_id` (not `app.system_actor`); the scope has 5 values (`resolve`, `system_auth`, `system`, `job`, `bootstrap`); the function is called `withSystemTx(purpose)` in SR-DB-05; TD-4 closed by this document | solution-architect |
+| ADR-0004 | also map `40P01`/`40001`; per-vehicle advisory lock; "after return" buffer semantics and recomputation on edit | solution-architect |
+| ADR-0002 | "reversible": forward-only policy + `rollback/` files (8.1); migrations run by role `rentcar_owner` | solution-architect |
+| ADR-0008 | `email_log` without body nor token; credential emails never retried (`category='credential'`, `max_attempts=1`); recipient nulled at 90 days | solution-architect, security-engineer |
+| Requirements A-12 / NFR-SEC-07 | booking code: 10 Crockford characters (50 bit), unique per tenant (decision 5.8 of 08-security) instead of 8 characters/31 symbols/global | requirements-analyst |
+| 08-security SR-DB-01 | backup role: BYPASSRLS where granted, otherwise `backup_read` policy (equivalent, proven); `rentcar_owner` NOLOGIN + `rentcar_migrator` | security-engineer |
+| 08-security SR-AUD-03 | append-only trigger requires owner **and** GUC (stricter); single function `purge_expired_records()` | security-engineer |
+| 08-security SR-GDPR-05 | `EmailLog`: recipient stored and nulled at 90 days (instead of not storing it: this document's earlier choice, withdrawn) | security-engineer |
+| Requirements FR-SYS-07 | the `expired` state is only derived (already written), in the DB only `active/cancelled` | requirements-analyst |
+| Requirements 6.1 | added tenant fields: `country_code`, `dpa_signed_at`, `short_description`, address, `og_image_key`, title max 45; "failed-login counters" not in the DB (ADR-0005) | requirements-analyst |
+| Spec §9 | index `Booking(vehicleId,startAt,endAt)` replaced by the GiST exclusion | - |
+| 08-security / 09-seo | confirmation page as a capability link (UX-7); `og_image_key` regenerated on every logo change | security-engineer, seo-specialist |
 
 ---
 
-## 15. Assunzioni, rischi e verifiche
+## 15. Assumptions, risks and verifications
 
-### 15.1 Verifiche eseguite [V] (PostgreSQL 16.15, container locale, script nella cartella di lavoro temporanea)
+### 15.1 Verifications performed [V] (PostgreSQL 16.15, local container, scripts in the temporary working folder)
 
-1. Proprietario non superuser crea `btree_gist`. 2. RLS+FORCE: senza GUC 0 righe, con GUC solo le righe del tenant, INSERT cross-tenant -> `42501`. 3. GUC vuota dopo il commit: policy con `NULLIF` -> 0 righe; cast diretto -> errore. 4. Scope `resolve` vede `tenants` e 0 righe di `vehicles`. 5. Esclusione con trigger e buffer: 10:30 rifiutata (23P01), 11:00 ammessa; 60 insert concorrenti -> 1 vincitore, 59 x 23P01, 0 x 40P01. 6. FK composita blocca prenotazione di A su veicolo di B anche per il proprietario. 7. Audit: UPDATE/DELETE bloccati per app (privilegi) e per owner (trigger). 8. `purge_tenant_data` dinamica: rifiuta ruolo non autorizzato, cancella solo il tenant indicato. 9. `pg_dump --enable-row-security` con ruolo non-BYPASSRLS e `pg_restore` come proprietario con FORCE RLS: dati, policy, trigger, vincolo di esclusione e grant ripristinati.
+1. A non-superuser owner creates `btree_gist`. 2. RLS+FORCE: without GUC 0 rows, with GUC only the tenant's rows, cross-tenant INSERT -> `42501`. 3. Empty GUC after commit: policy with `NULLIF` -> 0 rows; direct cast -> error. 4. Scope `resolve` sees `tenants` and 0 rows of `vehicles`. 5. Exclusion with trigger and buffer: 10:30 rejected (23P01), 11:00 allowed; 60 concurrent inserts -> 1 winner, 59 x 23P01, 0 x 40P01. 6. Composite FK blocks a booking of A on a vehicle of B even for the owner. 7. Audit: UPDATE/DELETE blocked for app (privileges) and for owner (trigger). 8. Dynamic `purge_tenant_data`: refuses an unauthorised role, deletes only the indicated tenant. 9. `pg_dump --enable-row-security` with a non-BYPASSRLS role and `pg_restore` as owner with FORCE RLS: data, policies, triggers, exclusion constraint and grants restored.
 
-### 15.2 Non verificato [NV] e controllo
+### 15.2 Not verified [NV] and check
 
-| # | Punto | Controllo |
+| # | Point | Check |
 |---|---|---|
-| NV1 | Il migratore Drizzle applica le pendenti in una transazione unica | M1, lettura codice/prova; la strategia vale in entrambi i casi |
-| NV2 | Ruoli `NOBYPASSRLS` e `ALTER ROLE SET` sul pooler del provider scelto | spike S1 su Neon / provider; checklist P3-P5 |
-| NV3 | Deadlock tra inserimenti incrociati sull'esclusione | spike S5 con/senza advisory lock |
-| NV4 | Compatibilita di Drizzle con colonne `tstzrange` custom e indici parziali nel diff | CI `generate` senza differenze |
-| NV5 | Stime di volume e costo dei dump | misura al lancio |
-| NV7 | `SET ROLE rentcar_owner` da `rentcar_migrator`: proprietario degli oggetti creati dal migratore Drizzle (incluso `drizzle.__drizzle_migrations`) e policy `TO rentcar_owner` efficaci con `current_user` | M1, test di catalogo |
-| NV6 | `date-fns` e tzdata di Postgres coincidono nei casi limite DST | test DST su ricavi e snapshot (NFR-TZ-01) |
+| NV1 | The Drizzle migrator applies the pending migrations in a single transaction | M1, code reading/test; the strategy holds either way |
+| NV2 | `NOBYPASSRLS` roles and `ALTER ROLE SET` on the chosen provider's pooler | spike S1 on Neon / provider; checklist P3-P5 |
+| NV3 | Deadlock between crossing inserts on the exclusion | spike S5 with/without advisory lock |
+| NV4 | Drizzle compatibility with custom `tstzrange` columns and partial indexes in the diff | CI `generate` with no diff |
+| NV5 | Volume and dump cost estimates | measure at launch |
+| NV7 | `SET ROLE rentcar_owner` from `rentcar_migrator`: owner of the objects created by the Drizzle migrator (including `drizzle.__drizzle_migrations`) and `TO rentcar_owner` policies effective with `current_user` | M1, catalog test |
+| NV6 | `date-fns` and Postgres tzdata agree in DST edge cases | DST tests on revenue and snapshots (NFR-TZ-01) |
 
-### 15.3 Assunzioni (da confermare)
+### 15.3 Assumptions (to confirm)
 
-DB-A1 `country_code` obbligatorio sul tenant, default `IT`. DB-A2 `dpa_signed_at` solo informativo, modificabile dal solo systemadmin. DB-A3 indirizzo tutto-o-niente. DB-A4 tetti: buffer 0-1440 min, anticipo 0-43200 min. DB-A5 targa unica anche tra veicoli archiviati. DB-A6 snapshot solo totali annuali. DB-A7 KPI del proprietario: solo conteggi prenotazioni. DB-A8 bootstrap systemadmin in produzione via link di attivazione. DB-A9 (superata da SR-GDPR-08) registro delle cancellazioni anche nel bucket dei backup. DB-A10 UUIDv7 generati dall'app; nessuna colonna `locale`. DB-A11 postgres 16 in CI piu job notturno su 17. DB-A12 `security_event`, `platform_audit` e `deletion_ledger` restano dopo l'eliminazione del tenant (solo id, IP come prefisso+HMAC) con la propria retention: da riportare nel DPA. DB-A13 il valore dello scope `tenant` e impostato anche da `withTenant` (SR-DB-03) ma le policy dei tenant non lo leggono.
+DB-A1 `country_code` mandatory on the tenant, default `IT`. DB-A2 `dpa_signed_at` informational only, editable by the systemadmin only. DB-A3 address all-or-none. DB-A4 caps: buffer 0-1440 min, lead time 0-43200 min. DB-A5 plate unique also among archived vehicles. DB-A6 snapshot yearly totals only. DB-A7 owner KPI: booking counts only. DB-A8 production systemadmin bootstrap via activation link. DB-A9 (superseded by SR-GDPR-08) deletion ledger also in the backup bucket. DB-A10 UUIDv7 generated by the app; no `locale` column. DB-A11 postgres 16 in CI plus a nightly job on 17. DB-A12 `security_event`, `platform_audit` and `deletion_ledger` remain after tenant deletion (ids only, IP as prefix+HMAC) with their own retention: to be stated in the DPA. DB-A13 the `tenant` scope value is also set by `withTenant` (SR-DB-03) but the tenant policies do not read it.
 
-### 15.4 Rischi
+### 15.4 Risks
 
-| Rischio | Gravita |
+| Risk | Severity |
 |---|---|
-| Provider i cui ruoli possono bypassare la RLS (P3): la difesa in profondita cade | alta |
-| Credenziale `rentcar_owner` (con policy `owner_all`) esposta fuori da CI | alta |
-| Un percorso di scrittura dimentica la correzione dello snapshot (mitigato da riconciliazione notturna, ritardo <= 24 h) | media |
-| Deadlock sull'esclusione senza advisory lock | media |
-| Funzioni `SECURITY DEFINER` (purge, KPI) sono superficie di privilegio: test di catalogo e revisione del security-engineer | media |
-| Dump che contiene `password_enc` insieme alla chiave (se mal custodita) | media |
-| Un restore da backup vecchio fa risorgere dati cancellati senza il registro (DB-A9, ora recepito come tabella `deletion_ledger` + export nel bucket, SR-GDPR-08) | media |
-| Postgres 17+ in produzione con funzionalita diverse dalla 16 di sviluppo | bassa |
+| Provider whose roles can bypass RLS (P3): defence in depth falls | high |
+| `rentcar_owner` credential (with the `owner_all` policy) exposed outside CI | high |
+| A write path forgets the snapshot correction (mitigated by nightly reconciliation, delay <= 24 h) | medium |
+| Deadlock on the exclusion without advisory lock | medium |
+| `SECURITY DEFINER` functions (purge, KPI) are privilege surface: catalog test and security-engineer review | medium |
+| Dump containing `password_enc` together with the key (if badly held) | medium |
+| A restore from an old backup brings deleted data back without the ledger (DB-A9, now adopted as the `deletion_ledger` table + export to the bucket, SR-GDPR-08) | medium |
+| Postgres 17+ in production with features different from the development 16 | low |
 
 ---
 
@@ -954,6 +954,6 @@ DB-A1 `country_code` obbligatorio sul tenant, default `IT`. DB-A2 `dpa_signed_at
 
 | ID | Domanda | Opzioni (la prima è raccomandata) | Perché conta / impatto | Bloccante |
 |---|---|---|---|---|
-| DB-2 | Quando si anonimizza un cliente, si cancellano anche le note libere scritte sulle sue prenotazioni? | A (raccomandata): si, le note vengono svuotate / B: no, restano | Le note possono contenere per errore nomi o dettagli personali; con A si perde qualche annotazione operativa sulle prenotazioni passate, con B resta il rischio di dati personali residui | no |
-| DB-4 | Se si modifica una prenotazione esistente (date o veicolo) dopo che il tenant ha cambiato il tempo di pausa tra noleggi, quale pausa vale? | A (raccomandata): quella attuale del tenant / B: quella che aveva la prenotazione quando fu creata | Con A le regole sono sempre aggiornate ma una modifica puo essere rifiutata per una pausa piu lunga; con B nessuna sorpresa ma regole miste nello stesso veicolo | no |
-| DB-5 | Gli archivi annuali (snapshot) devono contenere anche il dettaglio mese per mese? | A (raccomandata): no, solo totali annuali (globale e per veicolo); i mesi si ricalcolano dai dati / B: si, salvare anche 12 mesi per veicolo | A basta per confrontare gli anni; B permette confronti mensili "congelati" ma aumenta dati e lavoro di correzione | no |
+| DB-2 | Quando si anonimizza un cliente, si cancellano anche le note libere scritte sulle sue prenotazioni? | A (raccomandata): sì, le note vengono svuotate / B: no, restano | Le note possono contenere per errore nomi o dettagli personali; con A si perde qualche annotazione operativa sulle prenotazioni passate, con B resta il rischio di dati personali residui | no |
+| DB-4 | Se si modifica una prenotazione esistente (date o veicolo) dopo che il tenant ha cambiato il tempo di pausa tra noleggi, quale pausa vale? | A (raccomandata): quella attuale del tenant / B: quella che aveva la prenotazione quando fu creata | Con A le regole sono sempre aggiornate ma una modifica può essere rifiutata per una pausa più lunga; con B nessuna sorpresa ma regole miste nello stesso veicolo | no |
+| DB-5 | Gli archivi annuali (snapshot) devono contenere anche il dettaglio mese per mese? | A (raccomandata): no, solo totali annuali (globale e per veicolo); i mesi si ricalcolano dai dati / B: sì, salvare anche 12 mesi per veicolo | A basta per confrontare gli anni; B permette confronti mensili "congelati" ma aumenta dati e lavoro di correzione | no |
