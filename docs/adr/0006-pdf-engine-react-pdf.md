@@ -1,7 +1,7 @@
 # ADR-0006: PDF engine - @react-pdf/renderer
 
-- Status: proposed
-- Date: 2026-11-01
+- Status: accepted
+- Date: 2026-11-01 (accepted at GATE 2, 2026-11-01)
 - Deciders: user (GATE 2), solution-architect
 
 ## Context

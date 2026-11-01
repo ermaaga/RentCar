@@ -1,6 +1,6 @@
 # ADR-0011: Production hosting target (Vercel Pro, EU VPS as same-code alternative)
 
-- Status: proposed
+- Status: proposed (deferred to pre-GATE 4; code is provider-agnostic)
 - Date: 2026-11-01
 - Deciders: user (GATE 2, questions ARC-1 and ARC-2)
 
@@ -15,6 +15,9 @@ Phase 1 is local Docker Compose. Stated intent for production: app on Vercel, DB
 
 ## Decision
 Design for the strictest target (serverless) so that 1 and 2 are interchangeable by deployment configuration: Next.js `output: 'standalone'` Docker image for VPS, Vercel build for serverless; the only Vercel-aware code lives in `platform/*` adapters (e.g. reading the client IP header, region pin in `vercel.json`). Recommended production: Vercel Pro `fra1` + ADR-0010 + ADR-0009. The final hosting choice is the user's (ARC-2) and is not needed before go-live; Phase 1 does not depend on it.
+
+## GATE 2 note (2026-11-01)
+Deferred to pre-GATE 4 by user decision: this ADR stays "proposed". The code is provider-agnostic: only `DATABASE_URL`, `DIRECT_DATABASE_URL` and documented env variables differ between hosting targets, and CI checks both a pooled and a direct connection path. The decision is recorded as accepted (or superseded) when the user chooses before GATE 4.
 
 ## Consequences
 - Predictable monthly cost (Vercel Pro USD 20 + Neon Launch USD 5-15 at launch) instead of ToS risk.

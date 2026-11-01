@@ -1,7 +1,7 @@
 # ADR-0003: Tenant isolation by scoped repositories plus PostgreSQL RLS
 
-- Status: proposed
-- Date: 2026-11-01
+- Status: accepted
+- Date: 2026-11-01 (accepted at GATE 2, 2026-11-01)
 - Deciders: user (GATE 2, question ARC-3), solution-architect, security-engineer
 
 ## Context

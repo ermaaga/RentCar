@@ -1,9 +1,21 @@
 # Architecture and technology options: RentCar
 
-Version 1.0 · 2026-11-01 · Owner: solution-architect · Status: **proposal for GATE 2** (user chooses an option)
+Version 1.0 · 2026-11-01 · Owner: solution-architect · Status: **Option A chosen at GATE 2 (2026-11-01)**
 Inputs: `docs/01-discovery.md`, `docs/02-requisiti.md` (approved v1.1), `docs/spec/car-rental-spec.md`, `docs/00-stato-progetto.md`, `docs/pm/raid.md`, `docs/03-inputs/security-constraints.md`, `docs/03-inputs/observability-options.md`.
 Also read: `docs/03-inputs/devops-costs.md` (reconciled in section 11). ADRs: `docs/adr/0001` to `0014` (status: proposed).
 Language: English. Prices were checked on official pages on **2026-11-01** unless marked "estimated" or "third-party".
+
+---
+
+## Decision (GATE 2, 2026-11-01)
+
+- **Chosen: Option A (code bundle).** Drizzle + `pg`, in-house DB-backed sessions with argon2id, repository scoping + Postgres RLS from the first migration (ARC-3), react-pdf, cron endpoint + lazy jobs, nodemailer + outbox, Postgres rate-limit table. ADR-0001..0008 and 0012..0014 are **accepted**; ADR-0005 and ADR-0009 amended (below).
+- **Deferred to before GATE 4:** production host (Vercel Pro vs EU VPS), production DB provider and production S3 provider (ARC-2, ARC-5, ARC-6; ADR-0009 provider part, 0010, 0011 stay "proposed"). The code stays portable between A-hosting and C-hosting through environment variables only; no provider name in code.
+- **User decisions applied:** photo limit 4 MB with client-side downscale (ARC-4); new users and replaced admins get a one-time set-password link valid 24 h instead of a temporary password (SEC-3, deviation from spec §4, `CredentialIssuer`); no card or ID data (SEC-5); ASVS 4.0.3 L2 and password minimum 12; tenant data hard-deleted 90 days after termination (SEC-7).
+- **Accepted risks until GATE 4:** no MFA, no SMTP-change re-authentication/notification, no CAPTCHA switch. Extension points are kept (`SecondFactorVerifier`, `session.assurance_level`). The SSRF guard on the tenant SMTP host stays mandatory.
+- **CI:** GitHub Actions running all tests, created in M0.
+- **Code structure:** `docs/03b-struttura-codice.md` (single Next.js app, no workspace).
+- The rest of this document is the unchanged GATE 2 proposal.
 
 ---
 

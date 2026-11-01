@@ -1,7 +1,7 @@
 # ADR-0013: Rate-limiting store (Postgres by default, port for others)
 
-- Status: proposed
-- Date: 2026-11-01
+- Status: accepted
+- Date: 2026-11-01 (accepted at GATE 2, 2026-11-01)
 - Deciders: user (GATE 2), solution-architect, security-engineer
 
 ## Context

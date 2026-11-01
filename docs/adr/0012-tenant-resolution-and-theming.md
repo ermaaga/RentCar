@@ -1,7 +1,7 @@
 # ADR-0012: Single tenant-resolution point and runtime theming
 
-- Status: proposed
-- Date: 2026-11-01
+- Status: accepted
+- Date: 2026-11-01 (accepted at GATE 2, 2026-11-01)
 - Deciders: user (GATE 2), solution-architect, ui-designer
 
 ## Context

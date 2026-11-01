@@ -1,7 +1,7 @@
 # ADR-0014: Observability baseline and caching policy
 
-- Status: proposed
-- Date: 2026-11-01
+- Status: accepted
+- Date: 2026-11-01 (accepted at GATE 2, 2026-11-01)
 - Deciders: user (GATE 2), solution-architect, observability-engineer
 
 ## Context

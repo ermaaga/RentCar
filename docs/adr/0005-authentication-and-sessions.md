@@ -1,7 +1,7 @@
 # ADR-0005: Authentication and sessions (in-house DB-backed sessions)
 
-- Status: proposed
-- Date: 2026-11-01
+- Status: accepted
+- Date: 2026-11-01 (accepted at GATE 2, 2026-11-01; amended same day for SEC-3)
 - Deciders: user (GATE 2), solution-architect, security-engineer
 
 ## Context
@@ -20,11 +20,12 @@ Option 1.
 - Cookies `__Host-rc_tenant` / `__Host-rc_system` (HttpOnly, Secure, SameSite Lax; Strict where possible); `Secure` and prefix only on HTTPS (local http exception).
 - argon2id (`@node-rs/argon2`, m >= 19 MiB, t=2, p=1, tuned to ~250 ms on the target; spike S3); bcrypt >= 12 is the fallback; parameters in the encoded hash for upgrade-on-login.
 - Central guard `requireRole(scope, role)` on every action, handler and page; `mustChangePassword` enforced there; Origin-check wrapper on route handlers.
-- `CredentialIssuer` strategy: temporary password (spec) or one-time set-password link (SEC-3); both stored hashed, single use, expiring.
-- Extension point: `SecondFactorVerifier` port and `assurance_level`; no implementation now.
+- `CredentialIssuer` strategy with two implementations behind one port. **Active implementation (user decision SEC-3, 2026-11-01): `SetPasswordLinkIssuer`.** New tenant admins, new operators, replaced admins and reset requests receive a one-time set-password link: 256-bit random token, only its SHA-256 hash stored, valid 24 h, single use, consumed in the same transaction that sets the password (min length 12, ASVS V2.1.1), all other sessions of the user revoked on use, issuing a new link invalidates the previous one. No password is ever generated, shown or emailed. The link is delivered by the system SMTP (systemadmin creating a tenant admin) or the tenant SMTP (admin creating an operator); if delivery fails the creator sees the link once in the UI. `TemporaryPasswordIssuer` (spec text FR-AUTH-03/11) stays implemented as an option only if the decision is reversed; it is not wired in the composition root. Selection is by config key `CREDENTIAL_ISSUER=set_password_link` (default) and needs no schema change: both use the `credential_token` table (hash, user, purpose, expires_at, used_at). `mustChangePassword` remains for password-rotation cases (FR-AUTH-04) and is false for link-set passwords.
+- Extension point: `SecondFactorVerifier` port and `assurance_level`; no implementation now. The user accepted the absence of MFA until GATE 4 (residual risk R-AUTH-02/03 recorded in `docs/security/registro-rischi.md`); the port, the `session.assurance_level` column and a `NoopSecondFactorVerifier` returning "not required" are built so adding TOTP does not change the login flow.
 - Throttling via `RateLimitStore` keyed by `(tenant, username)` and hashed IP; progressive delay, identical responses.
 
 ## Consequences
+- Deviation from spec §4 (temporary password) recorded: requirements FR-AUTH-03/11 are amended by the requirements-analyst (SEC-3).
 - Exact fit to the requirements; about 1 to 1.5 weeks of work and a small surface (about 600 lines) that must be security-reviewed.
 - TOTP for systemadmin can be added later on the port (about days) without schema change beyond a factor table.
 - If MFA/passkeys for all tenants become urgent, migrating to Better Auth is a contained rewrite of the `auth` module (option B).
