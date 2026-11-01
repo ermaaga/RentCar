@@ -38,7 +38,7 @@ APPROVAZIONE_GO_LIVE: IN_ATTESA
 - **Language for questions to the user**: Italian (user request).
 - **UI languages**: English only at launch, simple single-locale i18n structure (spec §10, user 2026-11-01).
 - **Criticality and SLOs**: low for now, no alerting/on-call; free-tier monitoring only
-- **Chosen visual direction**: — (constraints from spec §10.2: shadcn/ui + Tailwind, Lucide, per-tenant CSS tokens, light/dark, self-hosted fonts)
+- **Chosen visual direction**: **Clear** + 3 borrowings (Field: large time numerals and 48 px targets on Today, 3 px focus ring; Warm: friendlier confirmation copy) — docs/design/clear/, user choice 2026-11-01
 
 ## Key decisions
 | Date | Decision | Rationale | Reference |
@@ -62,6 +62,8 @@ APPROVAZIONE_GO_LIVE: IN_ATTESA
 | 2026-11-01 | Tenant data after termination: export, hard delete after 90 days (SEC-7) | User choice | 02-requisiti.md |
 | 2026-11-01 | No MFA, no SMTP-change controls, no CAPTCHA switch: residual risks ACCEPTED by user until GATE 4 | User acceptance | security/registro-rischi.md |
 | 2026-11-01 | SEO: only /{slug} root indexable (SEO-1); optional tenant short description ≤160 chars (SEO-3) and optional address (SEO-4); title ≤45 chars | User choice | 09-seo.md |
+| 2026-11-01 | Visual direction Clear + 3 borrowings (UI-1) | User choice | docs/design/index.html |
+| 2026-11-01 | Tenant colors: automatic darker shade for links/text, block only pairs with no automatic fix (UI-2; rewords FR-BRD-04/A-29) | User choice | 04b-ui-design.md |
 | 2026-11-01 | UI: shadcn/ui on Tailwind, Lucide, per-tenant tokens | Spec constraint | spec §10.2 |
 
 ## Approval log
