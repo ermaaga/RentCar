@@ -35,7 +35,8 @@ Language rule: all code, comments, logs, tests, commits and branch names in Engl
     │   ├── (public)/[slug]/…         public booking site (theme.css route, search, booking, confirmation)
     │   ├── (tenant)/[slug]/admin/…   tenant admin and operator area
     │   ├── (system)/system/…         systemadmin console
-    │   ├── api/                      route handlers: jobs/run, healthz, readyz, media/[...key], pdf, exports
+    │   ├── api/                      route handlers: jobs/run, healthz, readyz, pdf, exports
+    │   ├── media/[...key]/route.ts   public media served under /media/* (ADR-0009, SR-UPL-06), immutable cache headers
     │   └── actions/                  server actions grouped per module (thin, built with defineAction)
     ├── modules/              BUSINESS CODE, one folder per bounded module (section 4)
     │   └── <module>/
@@ -46,18 +47,19 @@ Language rule: all code, comments, logs, tests, commits and branch names in Engl
     │       └── ui/                   React components/hooks of this module (feature components), messages keys use
     ├── platform/             TECHNICAL ADAPTERS shared by modules (each has port.ts + implementations)
     │   ├── config/           Zod env schema, loadConfig, production guards
-    │   ├── db/               pg pool, Drizzle instance, TenantDb/withTenant/withSystemTx, schema aggregator, errors mapping (SQLSTATE)
+    │   ├── db/               pg pool, Drizzle instance, TenantDb/withTenant/withSystemTx, with-retry.ts (`withTenantRetry`: one automatic retry of the whole transaction on 40P01/40001, ADR-0004), schema aggregator, errors mapping (SQLSTATE)
     │   ├── storage/          StoragePort; local-fs and s3 adapters
     │   ├── mailer/           Mailer port; nodemailer adapter, SSRF guard, fake
     │   ├── pdf/              PdfRenderer port; react-pdf adapter
     │   ├── scheduler/        JobScheduler port, cron-endpoint trigger helpers
     │   ├── rate-limit/       RateLimitStore port; postgres adapter, in-memory (tests/local only)
     │   ├── error-reporter/   ErrorReporter port; noop and sentry adapters
-    │   ├── logging/          pino logger factory, request context (AsyncLocalStorage), redaction list
+    │   ├── logging/          pino logger factory, request context (AsyncLocalStorage), redaction list, `Telemetry` facade (the only API modules use to log events and metrics; event names come from the typed event registry, `docs/12-osservabilita.md`)
+    │   ├── image/            ImageProcessor port + `sharp` adapter: magic-byte check, decode limits, 480/1280 WebP variants, metadata strip, OG image (used by fleet and branding; `sharp` stays out of modules)
     │   ├── crypto/           Encryptor (AES-256-GCM, key id + AAD), token generation/hash, constant-time compare
     │   ├── clock/            Clock port; system clock
     │   ├── ids/              IdGenerator port (uuid v7)
-    │   ├── http/             defineAction, defineRoute wrappers, Origin check, Result-to-response mapping
+    │   ├── http/             defineAction, defineRoute wrappers, Origin check, Result-to-response mapping; `after.ts` (`afterWithContext(task)`: wraps Next `after()`, keeps the request context, runs inline with a timeout in await mode; modules never import `next/server`); `csv-stream.ts` (`csvResponse`: RFC 4180, BOM, CSV-injection-safe text, backpressure)
     │   └── host/             the ONLY place that reads host-specific headers/env (client IP, region), e.g. vercel vs proxy
     ├── composition/          COMPOSITION ROOT (section 5): container.ts, test-container.ts
     ├── shared/               shared kernel: Result, AppError hierarchy, Money, time helpers, pagination, branded ids, Zod primitives
@@ -112,7 +114,7 @@ Hard bans (each is a CI rule):
 2. `process.env` read **only** in `platform/config` (and `scripts/` bootstrap, `next.config`, `drizzle.config`).
 3. No import cycles (`no-circular`), including between modules. Module dependency direction is acyclic (section 4).
 4. No deep imports into another module (`modules/booking/application/...` from `fleet`): use `modules/booking` (index).
-5. `Date.now()`, `new Date()` (no args), `Math.random()`, `crypto.randomUUID()` banned outside `platform/clock`, `platform/ids`, `platform/crypto`: use `Clock` and `IdGenerator`.
+5. `Date.now()`, `new Date()` (no args), `Math.random()`, `crypto.randomUUID()` banned outside `platform/clock`, `platform/ids`, `platform/crypto`: use `Clock` and `IdGenerator`. **Documented exception**: the edge middleware (`src/middleware.ts`) may call `crypto.randomUUID()` to create a request id when the incoming `x-request-id` is absent or invalid, because `IdGenerator` is not available on the edge runtime (`docs/12-osservabilita.md`); the lint rule allows this single file.
 6. Raw SQL (`sql\`\``, `pool.query`) only inside `infrastructure/` and `platform/db`, always parameterised.
 7. `dangerouslySetInnerHTML`, `eval`, `fetch(userControlled)` banned (Semgrep rules; SSRF guard lives in `platform/mailer`).
 8. A repository can only be constructed with a `TenantDb` handle (section 7), never with the global pool.
@@ -157,7 +159,7 @@ A new epic or feature extends the module that owns its data. A new module needs 
 - **Config** is built once by `loadConfig(process.env)` in `instrumentation.ts` and passed to `buildContainer(config)`. Nothing else reads env.
 - **Tests**: `composition/test-container.ts` `buildTestContainer({ overrides })` builds the same graph with fakes (`FakeClock`, `FakeMailer`, `InMemoryStorage`, `FakeRateLimitStore`, `NoopErrorReporter`) and, for integration tests, a real test database. Every service must be unit-testable by calling its factory with fakes: no `vi.mock` of modules, no global patching.
 - **Registering a new service**: (1) define `XxxDeps` and `createXxxService` in the module's `application/`; (2) add its ports to the module `index.ts`; (3) instantiate in `buildContainer` after its dependencies; (4) expose on `Container`; (5) add an override key in `buildTestContainer`. Adding a new adapter follows the same steps in `platform/<name>/`.
-- **Pluggable adapters selected by config** (AC10, NFR-PLG): `STORAGE_PROVIDER=local|s3`, `MAILER` (smtp-system), `ERROR_REPORTER=noop|sentry`, `RATE_LIMIT_STORE=postgres|memory` (memory refused outside `APP_ENV=local|ci`), `CREDENTIAL_ISSUER=set_password_link`, `SECOND_FACTOR=none`. The container has one `switch` per adapter with an exhaustive check.
+- **Pluggable adapters selected by config** (AC10, NFR-PLG): `STORAGE_PROVIDER=local|s3`, `MAILER` (smtp-system), `OBS_ERROR_REPORTER=noop|sentry` (`OBS_SENTRY_DSN` when sentry), `RATE_LIMIT_STORE=postgres|memory` (memory refused outside `APP_ENV=local|ci`), `CREDENTIAL_ISSUER=set_password_link`, `SECOND_FACTOR=none`. The container has one `switch` per adapter with an exhaustive check.
 
 ## 6. Standard patterns (one way to do each thing)
 
@@ -196,7 +198,7 @@ If an earlier milestone needs a pattern before its reference exists, it creates 
 | Use | When |
 |---|---|
 | **Server action** (`app/actions/<module>/*.ts`) | Any mutation initiated by our own UI: admin forms, public booking submit, login/logout, set-password, cancel booking. Progressive enhancement friendly. |
-| **Route handler** (`app/api/**/route.ts`) | Anything that is not a UI form mutation: `jobs/run` (Bearer `CRON_SECRET`), `healthz`/`readyz`, `media/[...key]` (GET, cache headers), PDF download, CSV/data export (streamed), `{slug}/theme.css`, future webhooks. |
+| **Route handler** (`app/api/**/route.ts`) | Anything that is not a UI form mutation: `jobs/run` (Bearer `CRON_SECRET`), `healthz`/`readyz`, `/media/*` (`app/media/[...key]/route.ts`, GET, cache headers, not under `/api`), PDF download, CSV/data export (streamed), `{slug}/theme.css`, future webhooks. |
 | **Server component data loading** | Reads for pages call a service **query** function directly (no action, no route). |
 
 Both are created only through wrappers in `platform/http`, so no unguarded entry point exists:
@@ -244,7 +246,7 @@ Every adapter has: `port.ts` (interface + error types), one file per implementat
 | `Mailer` | `send(message, smtpConfig)`; per-send transport, 5 s connect / 10 s socket timeouts; calls the SSRF guard (DNS resolve, reject private/loopback/link-local, ports 25/465/587/2525 only, TLS verified) **before** connecting; never logs credentials or bodies | `nodemailer`, `fake` |
 | `PdfRenderer` | `render(document) -> Buffer`; fonts embedded from files; logo as PNG | `react-pdf`, `fake` (returns marker bytes) |
 | `JobScheduler` | trigger side only (`/api/jobs/run`, compose sidecar, GitHub cron); jobs are idempotent use cases `runDueJobs(now)` with unique `JobRun(job, period)` and xact advisory lock | `cron-endpoint` |
-| `RateLimitStore` | `hit(key, window, limit) -> {allowed, retryAfter}`; keys HMAC-hashed; fail-closed for login/reset, fail-open for public reads; purge within 24 h | `postgres`, `memory` (local/CI only) |
+| `RateLimitStore` | `hit(key, window, limit) -> {allowed, retryAfter}`, `peek(key, window)` (read without increment, for lockout checks that refuse even the right password) and `lease(key, ttlSeconds)` (single-flight, e.g. one concurrent export per tenant); keys HMAC-hashed with a key HKDF-derived from `APP_ENCRYPTION_KEY` (label `rc:hmac:ratelimit:v1`); fail-closed for login/reset, fail-open for public reads; purge within 24 h | `postgres`, `memory` (local/CI only) |
 | `ErrorReporter` | `capture(error, context)` with PII scrubbing | `noop`, `sentry` |
 | `Clock` | `now(): Date` | `system`, `fake` (settable) |
 | `IdGenerator` | `uuid()` (v7) and `token(bytes)` | `system`, `sequential` (tests) |
@@ -259,13 +261,14 @@ Adapters may be host-aware only in `platform/host` (client IP header selection u
 - `schema.ts`: one Zod object for all variables (names in English, `SCREAMING_SNAKE_CASE`). `loadConfig(env)` returns a deeply readonly `AppConfig`; failure prints **variable names and reasons, never values**, and aborts startup (`instrumentation.ts`), including `next start` in Docker.
 - **Environment class**: `APP_ENV = local | ci | staging | production`. (`NODE_ENV` is `production` in the local compose build too, so it cannot discriminate.) Production-like = `staging | production`.
 - **Production guards** (Zod `superRefine`, unit-tested, mandated by the M0 control "dev placeholder keys rejected"):
-  - `SESSION_*`, `APP_ENCRYPTION_KEY`, `CRON_SECRET`, `RATE_LIMIT_HMAC_KEY` must be at least 32 bytes of entropy and **must not equal or start with the placeholder values committed in `.env.example`/`compose.yaml`** (placeholders carry the prefix `INSECURE_DEV_`; any value matching it is rejected when production-like).
+  - **Key derivation (SR-CRY-02)**: `APP_ENCRYPTION_KEY` (32-byte base64 master, optional `APP_ENCRYPTION_KEY_PREVIOUS` for rotation) is the only key secret; purpose keys (`smtp`, `ratelimit`, `form-token`, `ip-hash`) are derived with HKDF-SHA-256 and distinct `info` labels inside `platform/crypto`, one key never serves two purposes. There are no `SESSION_*` or `RATE_LIMIT_HMAC_KEY` variables (sessions are opaque DB tokens, nothing is signed).
+  - `APP_ENCRYPTION_KEY` and `CRON_SECRET` must be at least 32 bytes of entropy and **must not equal or start with the placeholder values committed in `.env.example`/`compose.yaml`** (placeholders carry the prefix `INSECURE_DEV_`; any value matching it is rejected when production-like).
   - Seed systemadmin password and the `seed` profile are refused when production-like.
   - `STORAGE_PROVIDER=local` and `RATE_LIMIT_STORE=memory` refused when production-like.
   - `DATABASE_URL` must use TLS (`sslmode=verify-full`) when production-like; the runtime URL must differ from `DIRECT_DATABASE_URL` and must not use the owner role (checked at startup by `readyz`, not by parsing).
-  - `PUBLIC_BASE_URL` must be https when production-like.
+  - `APP_BASE_URL` must be https when production-like.
   - Host portability: the check "local storage on Vercel" is expressed as `STORAGE_PROVIDER=local` + `HOST_KIND=serverless` (config value set by the deployment, defaulting to `server`), so no code inspects Vercel env names.
-- Variables beyond spec §3 already decided: `APP_ENCRYPTION_KEY`, `CRON_SECRET`, `DIRECT_DATABASE_URL`, `S3_REGION`, `S3_FORCE_PATH_STYLE`, `TRUSTED_PROXY_COUNT`, `UPLOAD_MAX_BYTES`, `CREDENTIAL_ISSUER`, `OBS_*`, `APP_ENV`, `HOST_KIND`.
+- Variables beyond spec §3 already decided: `APP_ENCRYPTION_KEY`, `CRON_SECRET`, `DIRECT_DATABASE_URL`, `S3_REGION`, `S3_FORCE_PATH_STYLE`, `TRUSTED_PROXY_COUNT`, `UPLOAD_MAX_BYTES`, `CREDENTIAL_ISSUER`, `OBS_*` (including `OBS_ERROR_REPORTER`), `APP_ENV`, `HOST_KIND`, `APP_BASE_URL`.
 - `.env.example` is the only committed env file; it is generated/validated by a test that every schema key appears in it and vice versa.
 
 ## 10. Quality limits and automated architecture checks (CI, all blocking)
@@ -295,7 +298,7 @@ CI jobs (GitHub Actions, created in M0): `lint-types-arch` -> `unit` -> `integra
 - Env vars `SCREAMING_SNAKE_CASE`; message keys `module.area.name` lowercase dot-separated (`booking.errors.conflict`); metric/event/log names `snake_case` English.
 - Server actions named `verbNoun` (`createVehicle`); route paths follow the spec URLs.
 
-**Errors, logging**: Result for expected failures (6.1); logger from `platform/logging` injected (`deps.logger`), JSON, fields `requestId`, `tenantId`, `actorId`, `event`; no PII (phones, emails, names, SMTP data, tokens) in logs - a redaction list and the log-scrub canary test enforce it. Audit events go to `AuditLog`, not the log.
+**Errors, logging**: Result for expected failures (6.1); logger from `platform/logging` injected (`deps.logger`), JSON, fields in `snake_case` per SR-LOG-01 (`request_id`, `tenant_id`, `actor_id`, `event`; IPs only as `ip_prefix` + `ip_hmac`); modules call the `Telemetry` facade with registered event names rather than free-form log strings; no PII (phones, emails, names, SMTP data, tokens) in logs - a redaction list and the log-scrub canary test enforce it. Audit events go to `AuditLog`, not the log.
 
 **Dates**: instants are UTC `Date`/`timestamptz`; calendar-day logic (pricing "calendar days touched", status derivation, year-end snapshot) uses the **tenant time zone** from `TenantScope` through helpers in `shared/time` (the only place using the date library; ASSUMPTION: `date-fns` + `@date-fns/tz`, confirmed by the backend-developer in M1 with a note in the module README). Domain functions receive `now` as a parameter. Tests use `FakeClock`; DST edge cases are mandatory test cases for pricing.
 
@@ -346,7 +349,7 @@ Support code: `tests/support/builders/` (factory functions for domain objects, d
 
 ## 16. Reusable shared modules (initial inventory; extend, never duplicate)
 
-`shared/result`, `shared/errors`, `shared/money`, `shared/time`, `shared/ids`, `shared/pagination`, `shared/zod/*` (phone, email, slug, hex colour, ISO date, money); `platform/http` (`defineAction`, `defineRoute`, `bearerAuth`), `platform/db` (`withTenant`, `withSystemTx`, SQLSTATE mapper), `platform/logging`, `platform/crypto`, `src/ui` (shadcn components, form field wrappers, data table, empty/loading/error states, `TenantThemeProvider`), `src/i18n`, `tests/support/*`. Before creating a helper, search these first (clean-architecture rule: reuse before create); at the third duplicate, extract (rule of three).
+`shared/result`, `shared/errors`, `shared/money`, `shared/time`, `shared/ids`, `shared/pagination`, `shared/zod/*` (phone, email, slug, hex colour, ISO date, money); `platform/http` (`defineAction`, `defineRoute`, `bearerAuth`, `afterWithContext`, `csvResponse`), `platform/image`, `platform/logging` (`Telemetry`), `platform/db` (`withTenant`, `withTenantRetry`, `withSystemTx`, SQLSTATE mapper), `platform/logging`, `platform/crypto`, `src/ui` (shadcn components, form field wrappers, data table, empty/loading/error states, `TenantThemeProvider`), `src/i18n`, `tests/support/*`. Before creating a helper, search these first (clean-architecture rule: reuse before create); at the third duplicate, extract (rule of three).
 
 ## 17. Known debt and proposed follow-ups
 
