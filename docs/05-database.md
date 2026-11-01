@@ -4,6 +4,10 @@ Version 1.0 · 2026-11-01 · Author: database-architect · Phase 4, wave A (anal
 Inputs read: `docs/03b-struttura-codice.md`, `docs/03-architettura.md`, ADR-0002/0003/0004/0005/0007/0008/0010/0013/0014, `docs/02-requisiti.md` v1.2, `docs/spec/car-rental-spec.md` §9, `docs/03-inputs/security-constraints.md`, `docs/security/sign-off.md`, plus the coordinator's messages (tenant fields: `shortDescription`, structured address, title max 45, Open Graph image key, `countryCode`, `dpaSignedAt`) and `docs/04a-ux.md` / `docs/09-seo.md` only for those fields. Aligned with `docs/08-security.md` (`SR-*` requirements, section 0.1).
 Language: English (user decision 2026-11-01: all documentation in `docs/` is in English); table, column, policy and role names and SQL are in English. Questions to the user are in Italian (user request).
 
+Change log:
+- v1.0 (2026-11-01): first version.
+- v1.1 (2026-11-01): requests from the backend analysis (06-backend-api §1.2 X7/X8) and the observability design (12-osservabilita, `/system/status`): (a) definer function `platform_tenant_usage()` (4.5, 4.6); (b) new table `export_download_tokens` for the termination-export download link, SR-GDPR-06 (5.23); (c) decision on cross-tenant reads of `job_runs` and `email_log` by scope `system`: `job_runs` yes (no personal data), `email_log` **no** row access, aggregate definer functions `platform_email_health()` and `platform_undelivered_credentials()` instead (4.5, 4.6); (d) tables 22 -> 23.
+
 Experimental verification: statements marked **[V]** were executed on PostgreSQL 16.15 (container `postgres:16`, 2026-11-01); statements marked **[NV]** are not verified and have an associated check (section 15).
 
 ---
@@ -11,7 +15,7 @@ Experimental verification: statements marked **[V]** were executed on PostgreSQL
 ## 0. Summary of decisions
 
 1. PostgreSQL 16 confirmed (relational, a single engine). The production provider is still agnostic (ADR-0010 stays "proposed"); section 1 sets the minimum requirements any provider must meet.
-2. 22 tables (18 domain/operational + `security_event`, `platform_audit`, `slug_tombstone`, `deletion_ledger` required by 08-security). Every table holding tenant data has `tenant_id`, `ENABLE` + `FORCE ROW LEVEL SECURITY`, a `tenant_isolation` policy, and **composite** FKs `(tenant_id, x_id)` to the parent, so a record can never point to a row of another tenant even with RLS bypassed [V].
+2. 23 tables (19 domain/operational including `export_download_tokens` + `security_event`, `platform_audit`, `slug_tombstone`, `deletion_ledger` required by 08-security). Every table holding tenant data has `tenant_id`, `ENABLE` + `FORCE ROW LEVEL SECURITY`, a `tenant_isolation` policy, and **composite** FKs `(tenant_id, x_id)` to the parent, so a record can never point to a row of another tenant even with RLS bypassed [V].
 3. **TD-4 resolved** (section 4): tenant-less paths use `withSystem(actor)`, which sets `app.scope` (`resolve | system_auth | system | job | bootstrap`, aligned with SR-DB-05 and ADR-0003), not a single "system". Each scope sees only the tables/commands of matrix 4.5. Slug resolution (the most frequent public path) can read **only** `tenants` (SR-DB-05).
 4. Policies use `NULLIF(current_setting(..., true), '')::uuid`: **the ADR-0003 form without `NULLIF` fails** with `invalid input syntax for type uuid: ""` on a pooled connection reused after a transaction [V].
 5. Double booking: `EXCLUDE USING gist (vehicle_id WITH =, blocked_during WITH &&) WHERE (status <> 'cancelled')` with `blocked_during` maintained by a trigger [V: 60-minute buffer, 10:30 conflicts, 11:00 free; 60 parallel inserts = 1 winner]. Plus a per-vehicle transactional advisory lock to avoid deadlocks (section 6).
@@ -45,6 +49,7 @@ Experimental verification: statements marked **[V]** were executed on PostgreSQL
 | SR-GDPR-05 | retention: sessions 7 d, tokens 7 d, rate-limit <= 24 h, idempotency keys 48 h, email log 12 months with recipient nulled at 90 d, `job_run` 12 months | 9.2 | replaces my earlier estimate (90 d / 180 d) |
 | SR-GDPR-07 | hard delete with a `SECURITY DEFINER` function, slug tombstone 12 months, row in `platform_audit` and in the ledger | 9.3, 5.20-5.22 | |
 | SR-GDPR-08 | deletion ledger, mandatory replay after every restore | 5.22, 9.3, 10 | |
+| SR-GDPR-06 | termination export download: hashed single-purpose token, expiry 7 days, 3 downloads | 5.23 | dedicated table (not `credential_tokens`) |
 | SR-RL-03 | rate-limit keys = HMAC, rows <= 24 h | 5.17 | |
 | SR-ACC-07 | ASCII slug, reserved, immutable, tombstone 12 months | 5.1, 5.21 | |
 | SR-VAL-09 / PB-04 / decision 5.8 | booking code `^[0-9A-HJKMNP-TV-Z]{10}$` (50 bit), unique per tenant | 5.12, 6.2 | **changes A-12** (8 characters, 31 symbols) |
@@ -101,6 +106,7 @@ erDiagram
   users ||--o{ audit_log : "actor snapshot"
   tenants ||--o{ email_log : outbox
   tenants ||--o{ job_runs : "idempotency"
+  tenants ||--o{ export_download_tokens : "termination export"
   rate_limit_buckets {
     text key PK
     timestamptz window_start PK
@@ -222,11 +228,12 @@ S=SELECT I=INSERT U=UPDATE D=DELETE. No TRUNCATE/REFERENCES/TRIGGER. No sequence
 | platform_audit | x | x | | | append-only; scope `system` |
 | slug_tombstone | x | x | | | INSERT/SELECT only; expiry via retention function |
 | deletion_ledger | x | x | | | append-only |
+| export_download_tokens | x | x | x | x | D = purge at 14 days and on tenant deletion |
 | email_log | x | x | x | x | D = retention |
 | job_runs | x | x | x | x | D = retention |
 | rate_limit_buckets | x | x | x | x | |
 
-`EXECUTE` on `purge_tenant_data(uuid)`, `purge_expired_records()` (retention of `audit_log`, `security_event`, `slug_tombstone`), `platform_kpis(...)`: only `rentcar_app` (`REVOKE ... FROM PUBLIC`). A catalog test compares actual privileges with this table (declared in `tests/security/grants-matrix.ts`).
+`EXECUTE` on `purge_tenant_data(uuid)`, `purge_expired_records()` (retention of `audit_log`, `security_event`, `slug_tombstone`), `platform_kpis(...)`, `platform_tenant_usage()`, `platform_email_health(...)`, `platform_undelivered_credentials(...)` (4.6): only `rentcar_app` (`REVOKE ... FROM PUBLIC`). A catalog test compares actual privileges with this table (declared in `tests/security/grants-matrix.ts`).
 
 ### 4.5 Policy matrix for tenant-less paths (resolves TD-4)
 
@@ -246,15 +253,29 @@ Columns = value of `app.scope`: `R`=resolve, `A`=system_auth (systemadmin login,
 | platform_audit | | | S,I | I | I |
 | slug_tombstone | S | | S,I | | |
 | deletion_ledger | | | S,I | | |
-| email_log | | I where `tenant_id IS NULL` | S,I,U | S, I, U where `created_at < now() - 90 days` (recipient nulling), D where `created_at < now() - 12 months`, U where `tenant_id IS NULL` | I where `tenant_id IS NULL` |
+| email_log | | I where `tenant_id IS NULL` | I; S,U where `channel = 'system_smtp'` (own mails: owner notifications and admin activation/reset) | S, I, U where `created_at < now() - 90 days` (recipient nulling), D where `created_at < now() - 12 months`, U where `tenant_id IS NULL` | I where `tenant_id IS NULL` |
 | job_runs | | | S | S,I,U,D | |
+| export_download_tokens | | | | | |
 | vehicles, vehicle_photos, expenses, customers, bookings, snapshots (2), rate_limit | no access (R,A,S,J,B) | | | | |
 
-Notes: `tenants` in `R` serves slug resolution; `slug_tombstone` in `R` serves answering with the same generic 404 for slugs reserved by deletion (SR-ACC-07). `security_event` events must be written in a separate, short transaction so a `ROLLBACK` of the work (e.g. access denied) does not lose them.
+Notes: `job_runs` is readable by `S` across tenants (confirmed): it holds only job names, period keys, counters and scrubbed error codes, no personal data, and `/system/status` needs it (12-osservabilita, Q1/Q1b). `email_log` is **not** readable by `S` across tenants: it carries recipient addresses of customers and staff of the tenants (SR-GDPR-05) and A-13 forbids the systemadmin from seeing customer data; `S` reads only its own system-SMTP mails and the console gets everything else through the aggregate definer functions of 4.6. `export_download_tokens` has no system-scope policy at all (the download route uses the tenant scope). `tenants` in `R` serves slug resolution; `slug_tombstone` in `R` serves answering with the same generic 404 for slugs reserved by deletion (SR-ACC-07). `security_event` events must be written in a separate, short transaction so a `ROLLBACK` of the work (e.g. access denied) does not lose them.
 
 Verifiable consequences: no system path reads bookings or customers (A-13); slug resolution cannot touch users or sessions; jobs work inside tenants with `withTenant` for each step (the tenant list comes from `J`). `systemadmin` deletes nothing: tenant deletion goes through the definer function (section 9.3). The matrix is declared in `tests/security/rls-matrix.ts` and a test generates, for each (scope, table, command), the expected outcome and compares it with `pg_policies`.
 
 **Aggregated data for KPI-7**: the systemadmin console shows only the booking count per tenant (coordinator decision, 04a). It is exposed through `platform_kpis(p_from timestamptz, p_to timestamptz)`, a `SECURITY DEFINER` function that requires `app_scope() = 'system'` and returns per tenant only `tenant_id, bookings_created, bookings_completed`. Revenue per tenant is NOT included (ASSUMPTION DB-A7: KPI-7 mentioned it, the coordinator reduced it to counts; to be added after confirmation).
+
+### 4.6 Read-only definer functions for the system console
+
+All `SECURITY DEFINER`, owner `rentcar_owner`, `SET search_path = pg_catalog, public`, `REVOKE ... FROM PUBLIC`, `EXECUTE` to `rentcar_app`, and the first statement raises an exception unless `app_scope() = 'system'` (a tenant, `resolve`, `job` or missing scope gets an error, not zero rows, so a wrong call is visible). They return aggregates only, never a personal column. Each has a catalog test (listed in the allowed `SECURITY DEFINER` set) and a scope test.
+
+| Function | Returns | Used by |
+|---|---|---|
+| `platform_tenant_usage()` | per tenant (all statuses except `deleted`): `tenant_id`, `vehicle_count` (vehicles with `archived_at IS NULL`, the figure compared with `max_vehicles`), `operator_count` (users with `role='operator'` and `status IN ('pending','active')`, compared with `max_operators`), `has_vehicles` (any vehicle, archived included), `has_bookings` (any booking, any status). Nothing else | FR-SYS-01 list (06-backend-api TEN-09) and the lock of time zone/currency "once a vehicle or booking exists" (A-14, FR-BRD-09): the service allows the change only if `has_vehicles = false AND has_bookings = false` (06-backend-api TEN-04, X7). For a single tenant the caller filters the result by id (about 50 rows at most) |
+| `platform_email_health(p_since timestamptz)` | `category`, `template`, `status`, `count` over `email_log.created_at >= p_since` (all tenants, no recipient, no tenant id) | `/system/status` section B (Q2); the delivery rate is computed by the caller on `category='transactional'` |
+| `platform_undelivered_credentials(p_since timestamptz)` | `tenant_id`, `related_id`, `last_attempt_at` of `email_log` rows with `category='credential'` and `status IN ('failed','abandoned')` | `/system/status` Q2b ("activation not delivered"); the admin then re-issues the link |
+| `platform_kpis(p_from, p_to)` | see above | `/system/status` section C |
+
+`platform_tenant_usage()` is not a materialised view: the underlying counts are cheap at this scale (<= 50 tenants x tens of vehicles, indexes `(tenant_id) WHERE archived_at IS NULL` on `vehicles`, `(tenant_id, role, status)` on `users`, `(tenant_id, start_at)` on `bookings` for the `EXISTS`).
 
 ---
 
@@ -596,7 +617,7 @@ The log keeps recipient, template, status, category and timestamps, **never** bo
 
 ### 5.18 Tables not created
 
-No `notification_markers` table (covered by `job_runs`), no `password_reset_tokens` (covered by `credential_tokens`), no `tenant_exports` (the `export_*` columns on `tenants` are enough).
+No `notification_markers` table (covered by `job_runs`), no `password_reset_tokens` (covered by `credential_tokens`), no `tenant_exports` (the `export_*` columns on `tenants` record the export; the download link is stored in `export_download_tokens`, 5.23).
 
 
 ### 5.19 security_event (SR-LOG-03, platform archive)
@@ -627,6 +648,27 @@ No full IP nor personal data. Append-only (`append_only_guard('12 months')`), IN
 ### 5.22 deletion_ledger (SR-GDPR-08)
 
 `id uuid PK`, `kind text CHECK in ('customer_anonymised','tenant_hard_deleted')`, `subject_tenant_id uuid NN`, `subject_customer_id uuid NULL` (CHECK: mandatory for `customer_anonymised`), `occurred_at timestamptz NN`. Ids and dates only, no personal data. Append-only (`append_only_guard('never')`), INSERT from the anonymisation transaction (scope `tenant`: allowed with `subject_tenant_id = app_tenant_id()`) and from the deletion function. Because a restore takes the database back in time, **the ledger also lives outside the DB**: the backup workflow exports the rows of the last 35 days, encrypted with `age`, to the dump bucket (section 10). The replay after a restore executes anonymisations (idempotent) and deletions again.
+
+### 5.23 export_download_tokens (termination export link, SR-GDPR-06, X8)
+
+Dedicated table rather than a new purpose in `credential_tokens`: that table is bound to a user (`user_id NOT NULL`, composite FK to `users`), keeps one live token per `(user_id, purpose)` and has no counters, while this link belongs to the tenant, is not a credential and needs a download counter.
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| id | uuid | PK | |
+| tenant_id | uuid | NN, FK | |
+| token_hash | bytea | NN, U, CHECK `octet_length = 32` | SHA-256 of a 256-bit token; the plaintext link exists only in the email sent to the tenant admin (not retried if it fails: the systemadmin re-issues, which sets `superseded_at` on the previous one) |
+| storage_key | text | NN | object `private/{tenantId}/exports/{uuid}.zip`, never served by `/media`; the route streams it after checking the token |
+| expires_at | timestamptz | NN, CHECK `expires_at > created_at` | `created_at + 7 days` (set by the app) |
+| download_count | smallint | NN default 0, CHECK `download_count <= max_downloads` | |
+| max_downloads | smallint | NN default 3, CHECK `max_downloads BETWEEN 1 AND 3` | |
+| superseded_at | timestamptz | NULL | |
+| created_by_user_id | uuid | NULL, FK users | the systemadmin who terminated or re-issued |
+| created_at | timestamptz | NN default now() | |
+
+Indexes: `UNIQUE (token_hash)`; `export_download_tokens_one_live UNIQUE (tenant_id) WHERE superseded_at IS NULL`; `(created_at)` for the purge. Atomic consumption (the counter increments only if a download is still allowed):
+`UPDATE export_download_tokens SET download_count = download_count + 1 WHERE token_hash = $1 AND superseded_at IS NULL AND expires_at > now() AND download_count < max_downloads RETURNING storage_key`.
+The route runs in the tenant scope resolved from the slug (also for a `terminated` tenant: the resolver returns the scope, the status check only blocks staff and public pages), is rate limited, and writes an `audit_log` row `export.downloaded` (ids only) in the same transaction. RLS: `tenant_isolation` only, no system policy. Retention: the daily job deletes rows and the object 14 days after creation (SR-GDPR-06: "deleted at expiry or after 14 days"); the tenant deletion function removes any remaining row because the table has a `tenant_id` column.
 
 ---
 
@@ -793,6 +835,7 @@ A single scan produces per-vehicle/month, global/month, per-vehicle total and gr
 | idempotency keys (`bookings.idempotency_key`) | 48 hours | hourly per-tenant job |
 | `job_runs` | 12 months | daily job |
 | `rate_limit_buckets` | <= 24 h (in practice window + 1 h) | hourly job |
+| `export_download_tokens` and the export object | 14 days after creation (link valid 7 days, 3 downloads) | daily job |
 | `sessions`, `credential_tokens` | 7 days after expiry/use (revoked sessions are deleted immediately) | daily job |
 | Snapshots | while the tenant exists | - |
 | Terminated tenant | 90 days then deletion (9.3); the tombstone remains | systemadmin procedure |
@@ -807,7 +850,7 @@ A single scan produces per-vehicle/month, global/month, per-vehicle total and gr
 
 **Tenant termination and deletion** (SEC-7, US-066, SR-GDPR-06/07):
 1. Day 0 (scope `system`): `status='terminated'`, `terminated_at`, `deletion_due_at = +90 days`; tenant sessions deleted; access blocked; `platform_audit` row.
-2. The tenant export is produced by a job in scope `tenant` (never a system read); delivery recorded in `export_delivered_at`.
+2. The tenant export is produced by a job in scope `tenant` (never a system read); the download link is a row of `export_download_tokens` (5.23) emailed to the tenant admin; delivery recorded in `export_delivered_at`.
 3. Reminder before the deadline (job `J` on the partial index).
 4. Day >= 90, the UI requires the typed slug and the systemadmin password: the app first deletes the storage prefixes (`tenants/{id}/`, `private/{id}/`) and verifies they are empty, then calls `purge_tenant_data(tenant_id)`.
 5. `purge_tenant_data` (`SECURITY DEFINER`, owner `rentcar_owner`, `SET search_path = pg_catalog, public`, `REVOKE ... FROM PUBLIC`, `EXECUTE` to `rentcar_app`): refuses if not `app_scope() = 'system'`, if `status <> 'terminated'`, if `deletion_due_at > now()` (the 90 days cannot be bypassed) or if both `export_delivered_at` and `deletion_override_reason` are missing; sets `app.purge_mode`; discovers from `pg_class`/`pg_attribute` all tables with a `tenant_id` column and empties them **in FK topological order** (leaves first, error on a cycle; the list is generated from the catalog and compared in a test); renames the tenant's slug to `deleted-<id>` and inserts it into `slug_tombstone` (12 months); moves `tenants` to `deleted` (name `deleted-<id>`); inserts `platform_audit` (`tenant.hard_deleted`) and `deletion_ledger` (`tenant_hard_deleted`), while `security_event` is written by the app (`tenant.hard_deleted`). Proven [V] (basic version): 4 rows of one tenant deleted, the other intact, call with the wrong scope refused. Permanent test: after the function, zero rows in **every** table with `tenant_id`.
@@ -865,6 +908,8 @@ Aligned with 03b §14 (template DB with the real migrations, connection with the
 8. **GUC bleed**: 1,000 interleaved transactions over 3 tenants with a small pool (spike S1 as a permanent test, reduced volume in CI); also checks `current_setting('app.tenant_id', true)` is empty after commit.
 9. **Job/outbox integration**: `job_runs` idempotency, credentials never retried, a single v1 snapshot, version n+1 only if totals change.
 10. **Performance**: `seed:perf` dataset, nightly run.
+11. **Console functions** (4.6): each `platform_*` function raises unless the scope is `system`, returns the expected per-tenant counts on the twin fixtures (including `has_bookings` for a tenant with only cancelled bookings), and `email_log` rows of tenant SMTP are invisible to a `system` scope `SELECT` (0 rows).
+12. **Export link** (5.23): 4th download, expired, superseded and wrong-tenant tokens are refused; the counter is exact under 10 concurrent downloads of a token with 2 remaining.
 
 ---
 
@@ -889,6 +934,8 @@ The sensitive audit events listed in the dictionary (5.14) coincide with FR-AUD-
 | 08-security SR-GDPR-05 | `EmailLog`: recipient stored and nulled at 90 days (instead of not storing it: this document's earlier choice, withdrawn) | security-engineer |
 | Requirements FR-SYS-07 | the `expired` state is only derived (already written), in the DB only `active/cancelled` | requirements-analyst |
 | Requirements 6.1 | added tenant fields: `country_code`, `dpa_signed_at`, `short_description`, address, `og_image_key`, title max 45; "failed-login counters" not in the DB (ADR-0005) | requirements-analyst |
+| 06-backend-api (X7, X8) | `platform_tenant_usage()` implemented as in 4.6 (columns `vehicle_count`, `operator_count`, `has_vehicles`, `has_bookings`); export link stored in the dedicated table `export_download_tokens` instead of columns on `tenants` or a `credential_tokens` purpose | backend-developer |
+| 12-osservabilita (`/system/status`) | `job_runs` readable cross-tenant in scope `system` (direct queries Q1/Q1b are fine); `email_log` is not: use `platform_email_health()` and `platform_undelivered_credentials()` instead of Q2/Q2b | observability-engineer |
 | Spec §9 | index `Booking(vehicleId,startAt,endAt)` replaced by the GiST exclusion | - |
 | 08-security / 09-seo | confirmation page as a capability link (UX-7); `og_image_key` regenerated on every logo change | security-engineer, seo-specialist |
 
@@ -914,7 +961,7 @@ The sensitive audit events listed in the dictionary (5.14) coincide with FR-AUD-
 
 ### 15.3 Assumptions (to confirm)
 
-DB-A1 `country_code` mandatory on the tenant, default `IT`. DB-A2 `dpa_signed_at` informational only, editable by the systemadmin only. DB-A3 address all-or-none. DB-A4 caps: buffer 0-1440 min, lead time 0-43200 min. DB-A5 plate unique also among archived vehicles. DB-A6 snapshot yearly totals only. DB-A7 owner KPI: booking counts only. DB-A8 production systemadmin bootstrap via activation link. DB-A9 (superseded by SR-GDPR-08) deletion ledger also in the backup bucket. DB-A10 UUIDv7 generated by the app; no `locale` column. DB-A11 postgres 16 in CI plus a nightly job on 17. DB-A12 `security_event`, `platform_audit` and `deletion_ledger` remain after tenant deletion (ids only, IP as prefix+HMAC) with their own retention: to be stated in the DPA. DB-A13 the `tenant` scope value is also set by `withTenant` (SR-DB-03) but the tenant policies do not read it.
+DB-A1 `country_code` mandatory on the tenant, default `IT`. DB-A2 `dpa_signed_at` informational only, editable by the systemadmin only. DB-A3 address all-or-none. DB-A4 caps: buffer 0-1440 min, lead time 0-43200 min. DB-A5 plate unique also among archived vehicles. DB-A6 snapshot yearly totals only. DB-A7 owner KPI: booking counts only. DB-A8 production systemadmin bootstrap via activation link. DB-A9 (superseded by SR-GDPR-08) deletion ledger also in the backup bucket. DB-A10 UUIDv7 generated by the app; no `locale` column. DB-A11 postgres 16 in CI plus a nightly job on 17. DB-A12 `security_event`, `platform_audit` and `deletion_ledger` remain after tenant deletion (ids only, IP as prefix+HMAC) with their own retention: to be stated in the DPA. DB-A14 `has_bookings` counts bookings of any status (a cancelled booking still locks time zone and currency). DB-A15 export link: 7 days, 3 downloads, row and object deleted at 14 days. DB-A13 the `tenant` scope value is also set by `withTenant` (SR-DB-03) but the tenant policies do not read it.
 
 ### 15.4 Risks
 
@@ -925,6 +972,7 @@ DB-A1 `country_code` mandatory on the tenant, default `IT`. DB-A2 `dpa_signed_at
 | A write path forgets the snapshot correction (mitigated by nightly reconciliation, delay <= 24 h) | medium |
 | Deadlock on the exclusion without advisory lock | medium |
 | `SECURITY DEFINER` functions (purge, KPI) are privilege surface: catalog test and security-engineer review | medium |
+| A definer function in 4.6 returns more than documented (privilege creep): catalog test lists the allowed set and the return columns are reviewed | low |
 | Dump containing `password_enc` together with the key (if badly held) | medium |
 | A restore from an old backup brings deleted data back without the ledger (DB-A9, now adopted as the `deletion_ledger` table + export to the bucket, SR-GDPR-08) | medium |
 | Postgres 17+ in production with features different from the development 16 | low |
@@ -936,7 +984,7 @@ DB-A1 `country_code` mandatory on the tenant, default `IT`. DB-A2 `dpa_signed_at
 - **Stato**: completato (solo analisi; nessuna migrazione scritta; nessuna approvazione modificata)
 - **File prodotti/modificati**: `/Users/ermaaga/Work/RentCar/docs/05-database.md`
 - **Sintesi**:
-  1. PostgreSQL 16 confermato; 22 tabelle con dizionario completo, FK composite `(tenant_id, x_id)`, RLS `ENABLE+FORCE` ovunque tranne `rate_limit_buckets`; ruoli `rentcar_owner` (NOLOGIN) / `rentcar_migrator` / `rentcar_app` / `rentcar_backup` e matrice dei grant.
+  1. PostgreSQL 16 confermato; 23 tabelle con dizionario completo, FK composite `(tenant_id, x_id)`, RLS `ENABLE+FORCE` ovunque tranne `rate_limit_buckets`; ruoli `rentcar_owner` (NOLOGIN) / `rentcar_migrator` / `rentcar_app` / `rentcar_backup` e matrice dei grant.
   2. TD-4 risolto: `app.scope` con cinque valori non-tenant (resolve, system_auth, system, job, bootstrap) e matrice 4.5 per tabella/comando; scoperto e documentato che la policy di ADR-0003 senza `NULLIF` fallisce su connessioni di pool riusate.
   3. Esclusione GiST con filtro `status <> 'cancelled'`, `blocked_during` da trigger, buffer snapshot, advisory lock per veicolo, mapping di 23P01/40P01; codice prenotazione a 10 caratteri Crockford (50 bit, unico per tenant) come da 08-security, che sostituisce A-12.
   4. Ricavi calcolati in SQL nel fuso del tenant con `GROUPING SETS`; snapshot append-only versionati, regola "crea v1 prima di modificare", riconciliazione notturna.
@@ -945,7 +993,7 @@ DB-A1 `country_code` mandatory on the tenant, default `IT`. DB-A2 `dpa_signed_at
   7. Backup `pg_dump` cifrato 30 giorni con ruolo read-only (BYPASSRLS dove concesso, altrimenti policy `backup_read` provata); restore con FORCE RLS provato, confronto dei conteggi di riga e replay obbligatorio del registro delle cancellazioni.
   8. Allineamento a 08-security: tabella SR-* nella sezione 0.1 (SR-DB-01..10, SR-AUD, SR-GDPR-04/05/07/08, SR-EML-02/06, SR-SES, SR-LOG-03, SR-VAL-09); scostamenti dichiarati: backup role via policy se BYPASSRLS non concedibile, trigger append-only piu severo.
   9. Integrati i campi tenant richiesti: `short_description` (160), indirizzo strutturato (tutto-o-niente), titolo max 45, `og_image_key`, `country_code` (distinto dal paese dell'indirizzo), `dpa_signed_at`.
-- **Assunzioni**: DB-A1..DB-A13 (sezione 15.3), tra cui country_code obbligatorio, DPA solo informativo, snapshot solo totali annuali, KPI del proprietario a soli conteggi, bootstrap produzione via link, archivi di piattaforma conservati dopo l'eliminazione del tenant (solo id).
+- **Assunzioni**: DB-A1..DB-A15 (sezione 15.3; v1.1: funzioni definer per la console di sistema, tabella `export_download_tokens`, `email_log` non leggibile cross-tenant dallo scope `system`), tra cui country_code obbligatorio, DPA solo informativo, snapshot solo totali annuali, KPI del proprietario a soli conteggi, bootstrap produzione via link, archivi di piattaforma conservati dopo l'eliminazione del tenant (solo id).
 - **Rischi**: provider con ruoli che bypassano la RLS (alta); provider che non concede BYPASSRLS al ruolo di backup (media, mitigato da `backup_read`); esposizione credenziale owner (alta); snapshot non corretto da percorso dimenticato (media); deadlock esclusione senza lock (media); funzioni definer (media); restore che resuscita dati cancellati (media).
 - **Rilievi bloccanti**: nessuno (analisi).
 - **Criteri non verificati**: nessun Must bloccato; i punti NV1-NV7 della sezione 15.2 sono controlli di M1/spike S1/S5 gia pianificati. Strumenti usati: `postgres:16` in Docker (avviato dopo aver avviato Docker Desktop), `psql`, `pg_dump`, `pg_restore`.
