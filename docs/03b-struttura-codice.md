@@ -46,7 +46,7 @@ Language rule: all code, comments, logs, tests, commits and branch names in Engl
     │       └── ui/                   React components/hooks of this module (feature components), messages keys use
     ├── platform/             TECHNICAL ADAPTERS shared by modules (each has port.ts + implementations)
     │   ├── config/           Zod env schema, loadConfig, production guards
-    │   ├── db/               pg pool, Drizzle instance, TenantDb/withTenant/withSystem, schema aggregator, errors mapping (SQLSTATE)
+    │   ├── db/               pg pool, Drizzle instance, TenantDb/withTenant/withSystemTx, schema aggregator, errors mapping (SQLSTATE)
     │   ├── storage/          StoragePort; local-fs and s3 adapters
     │   ├── mailer/           Mailer port; nodemailer adapter, SSRF guard, fake
     │   ├── pdf/              PdfRenderer port; react-pdf adapter
@@ -213,14 +213,15 @@ Both are created only through wrappers in `platform/http`, so no unguarded entry
 **Types** (in `modules/tenancy` and `platform/db`):
 - `TenantScope`: opaque branded type `{ tenantId, slug, timeZone, currency }`. Its only constructors are `TenantResolver.resolve()` and the system/jobs path; the brand makes it impossible to forge in feature code (the constructor symbol is not exported from the module `index.ts`).
 - `TenantDb`: a handle created by `db.withTenant(scope, fn)`. `fn` receives a `TenantTx` (transaction handle) that is **already bound** to the tenant.
-- `SystemDb`: `db.withSystem(actor: SystemActor, reason, fn)` for tenant-less operations (system console, slug lookup, job tenant iteration). It sets `app.system_actor` (not `app.tenant_id`), writes an audit/log line, and is callable only from code that holds a `SystemActor` (obtained from a systemadmin session or the jobs entry point). RLS policies on tenant-owned tables allow access only when `tenant_id = current_setting('app.tenant_id', true)::uuid`; the `tenants`/`users` (system realm) policies additionally allow the system GUC. The database-architect owns the final policies and grants.
+- `SystemTx`: `db.withSystemTx(scope, fn)` for tenant-less operations, where `scope` is a member of the closed enum `resolve | system_auth | system | job | bootstrap` (ADR-0003; each call site passes a literal, an architecture test rejects dynamic values). It sets the transaction-local GUCs `app.scope` and `app.actor_id` (never `app.tenant_id`; `withTenant` and `withSystemTx` are mutually exclusive), and records `system.context.used` in `security_event` in a separate short transaction. A `SystemTx` is obtainable only by code holding the right credential: `resolve` by the `TenantResolver`, `system_auth` by the systemadmin login use case, `system` from a validated systemadmin session, `job` from the jobs entry point (valid `CRON_SECRET`), `bootstrap` from `scripts/create-systemadmin.ts`. Which table and command each scope may use is the matrix in `docs/05-database.md` section 4.5, mirrored in `tests/security/rls-matrix.ts`. Tenant policies use `tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid`.
+- **Database roles**: `rentcar_owner` (NOLOGIN, owns objects), `rentcar_migrator` (LOGIN, member of owner, `SET ROLE rentcar_owner` in the migration runner, direct connection), `rentcar_app` (runtime, non-owner, no BYPASSRLS, `DATABASE_URL`), `rentcar_backup` (read-only, dump job). Application code only ever connects as `rentcar_app`.
 
 **Transaction and GUC handling** (works with transaction-mode poolers, AR-2):
 1. `withTenant` opens an explicit transaction on a pool client: `BEGIN`.
 2. `SELECT set_config('app.tenant_id', $1, true)` (the `true` makes it transaction-local, equivalent to `SET LOCAL`). Parameterised, never string-concatenated.
 3. Run `fn(tx)`; `COMMIT`; on error `ROLLBACK`; the client is always released in `finally`.
 4. **Forbidden**: session-level `SET`, `set_config(..., false)`, session advisory locks, `LISTEN/NOTIFY`, named prepared statements, running repository queries on the bare pool. `pg_try_advisory_xact_lock` (transaction-level) is allowed for jobs.
-5. The runtime DB role is non-owner, without `BYPASSRLS`; the migration role is separate (`DIRECT_DATABASE_URL`). Test: the runtime role with no GUC set sees zero rows on every tenant table.
+5. The runtime DB role `rentcar_app` is non-owner, without `BYPASSRLS`; the migrator is separate (`DIRECT_DATABASE_URL`). Tests: with no GUC set, and with an empty-string GUC left on a reused pooled connection (pool `max=1`, after commit, rollback and error), the runtime role sees zero rows on every tenant table.
 6. Nested `withTenant` calls are not allowed; a service that needs two repositories receives one `tx` and passes it to both (unit of work = the `withTenant` callback).
 
 **Repository rules**:
@@ -229,7 +230,7 @@ Both are created only through wrappers in `platform/http`, so no unguarded entry
 - Repositories return **domain types** (mapped rows), never Drizzle row types; they contain no business rules; they translate SQLSTATE errors (6.1).
 - Inserts take `tenantId` from `tx`, never from caller input (a DTO field called `tenantId` is a review blocker).
 - Reads for lists are paginated and bounded; no `select *` of wide tables for listings.
-- Tenant-less repositories (`TenantRepository`, `SystemUserRepository`, `JobRunRepository`) take `SystemDb` and are listed explicitly in `tests/security/system-paths.md` (reviewed by security-engineer).
+- Tenant-less repositories (`TenantRepository`, `SystemUserRepository`, `JobRunRepository`) take a `SystemTx` and are listed explicitly in `tests/security/system-paths.md` (reviewed by security-engineer).
 
 **CI guarantees** (`tests/security/`): (a) a registry test fails if any table with a `tenant_id` column is missing from the matrix; (b) the matrix generator exercises, for each registered entity and each repository/service read/write path, "tenant A actor, tenant B resource" and expects 404 / empty (never 200 with data); (c) catalog query asserts every tenant table has RLS enabled and forced; (d) "runtime role without GUC returns zero rows"; (e) concurrency test of 1,000 interleaved tenant transactions shows no GUC bleed (spike S1 as permanent test, smaller volume in CI).
 
@@ -345,7 +346,7 @@ Support code: `tests/support/builders/` (factory functions for domain objects, d
 
 ## 16. Reusable shared modules (initial inventory; extend, never duplicate)
 
-`shared/result`, `shared/errors`, `shared/money`, `shared/time`, `shared/ids`, `shared/pagination`, `shared/zod/*` (phone, email, slug, hex colour, ISO date, money); `platform/http` (`defineAction`, `defineRoute`, `bearerAuth`), `platform/db` (`withTenant`, `withSystem`, SQLSTATE mapper), `platform/logging`, `platform/crypto`, `src/ui` (shadcn components, form field wrappers, data table, empty/loading/error states, `TenantThemeProvider`), `src/i18n`, `tests/support/*`. Before creating a helper, search these first (clean-architecture rule: reuse before create); at the third duplicate, extract (rule of three).
+`shared/result`, `shared/errors`, `shared/money`, `shared/time`, `shared/ids`, `shared/pagination`, `shared/zod/*` (phone, email, slug, hex colour, ISO date, money); `platform/http` (`defineAction`, `defineRoute`, `bearerAuth`), `platform/db` (`withTenant`, `withSystemTx`, SQLSTATE mapper), `platform/logging`, `platform/crypto`, `src/ui` (shadcn components, form field wrappers, data table, empty/loading/error states, `TenantThemeProvider`), `src/i18n`, `tests/support/*`. Before creating a helper, search these first (clean-architecture rule: reuse before create); at the third duplicate, extract (rule of three).
 
 ## 17. Known debt and proposed follow-ups
 
@@ -354,6 +355,6 @@ Support code: `tests/support/builders/` (factory functions for domain objects, d
 | TD-1 | No existing code: all reference paths in section 6 are planned, not yet real | Each is created by the first task that needs it (M1/M2/M3) and this document is updated in the same commit |
 | TD-2 | Date library not yet pinned (ASSUMPTION `date-fns` + `@date-fns/tz`) | Backend-developer confirms in M1; ADR only if a different library is chosen |
 | TD-3 | i18n library not yet pinned (ASSUMPTION `intl-messageformat`) | Frontend-developer confirms in M1 |
-| TD-4 | Final RLS policies for system-realm tables (`tenants`, system `users`, `jobs`) | database-architect (Phase 4) validates against section 7 and spike S1 |
+| TD-4 | ~~Final RLS policies for system-realm tables~~ resolved by `docs/05-database.md` section 4.5 (five scopes, table x command matrix) | Spike S1 and the `rls-matrix` test confirm on the real pooler |
 | TD-5 | Hosting-specific code (client IP header, region pin) deferred with the hosting decision | Confined to `platform/host` and `vercel.json`/Compose files; no impact on modules |
 | TD-6 | MFA absent by user decision (risk accepted until GATE 4); `SecondFactorVerifier` is a no-op | Implement TOTP for systemadmin on the existing port if the decision changes |

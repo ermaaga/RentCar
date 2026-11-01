@@ -16,7 +16,8 @@ Spec allows Prisma or Drizzle. Needs: PostgreSQL features not covered by most OR
 Option 1 (Drizzle + node-postgres). Migration files are reviewed SQL committed to the repo; non-modelled objects are hand-written SQL migrations. Migration runner is a small script using Drizzle's migrator under `pg_advisory_lock`.
 - Local/Compose: one-shot `migrate` service runs before `app` (`service_completed_successfully`); seed is a separate dev-profile service that refuses production mode without a flag.
 - Production (serverless): migrations run in CI against `DIRECT_DATABASE_URL` (non-pooled) *before* the new deployment is promoted; never on function cold start. Expand/contract discipline because old and new versions overlap.
-- Runtime role differs from the migration role (no DDL, not owner) for RLS.
+- Runtime role differs from the migration role (no DDL, not owner) for RLS. Roles are created by a bootstrap script: `rentcar_owner` (NOLOGIN), `rentcar_migrator` (runs `SET ROLE rentcar_owner` at session start so objects are owned by the owner), `rentcar_app`, `rentcar_backup`.
+- **"Reversible" means forward-only migrations plus rollback files.** Drizzle only moves forward. Every expansion migration has `drizzle/rollback/NNNN_name.down.sql` (ignored by the migrator) and a CI test "up, down, up" on an empty database; contraction migrations (drop/rename) are never rolled back and are released only after the expand/contract window. Recovery from a bad contraction is restore from backup, not a down script.
 
 ## Consequences
 - SQL-close code is easy to review for tenant scoping and the exclusion constraint.
