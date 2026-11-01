@@ -141,3 +141,10 @@ Acceptance is not recorded yet. When the user accepts, the PM updates `Status` t
 ## 5. Review
 
 Next review: start of Gate 3 (plan), then at the end of every milestone and at Gate 4. New risks from the Phase 4 threat model (`docs/08-security.md`) are added here by the cybersecurity-manager.
+
+## User risk acceptance log (recorded by PM)
+| Date | Risk | Decision | Accepted by | Valid until |
+|---|---|---|---|---|
+| 2026-11-01 | No MFA for systemadmin or tenant admins (SEC-1 = none; R-AUTH-02) | Accepted; `SecondFactorVerifier` extension point stays in code | User (@Ermal), explicit answer | GATE 4 — must be re-decided before real tenants |
+| 2026-11-01 | No password re-entry and no notification on tenant SMTP settings change (SEC-11 = no) | Accepted; SSRF guard on SMTP host remains mandatory | User (@Ermal), explicit answer | GATE 4 — must be re-decided |
+| 2026-11-01 | No per-tenant CAPTCHA switch against distributed fake bookings (SEC-10 = no; RK-1) | Accepted; REQ-7 limits only | User (@Ermal), explicit answer | GATE 4 — must be re-decided |
