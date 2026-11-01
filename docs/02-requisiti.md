@@ -1,12 +1,14 @@
 # Requirements: RentCar (multi-tenant car rental SaaS)
 
-Version 1.1 · 2026-11-01 · Owner: requirements-analyst · Status: draft for GATE 1 (all REQ-1..REQ-16 questions answered by the user and integrated)
+Version 1.2 · 2026-11-01 · Owner: requirements-analyst · Status: GATE 1 content plus GATE 2 security/architecture deltas (all REQ-1..REQ-16 questions answered and integrated)
 Sources: `docs/spec/car-rental-spec.md` (primary), `docs/01-discovery.md`, `docs/00-stato-progetto.md`, `docs/pm/raid.md`, user answers to REQ-1..REQ-16 (2026-11-01).
 Language: English (decision 2026-11-01). Spec section references are written `§n`; spec acceptance criteria `AC1`..`AC11`.
 
 Conventions: priority uses MoSCoW (M/S/C/W). `A-nn` = assumption made by the analyst, to be confirmed (section 9). `REQ-n` = decision already taken by the user (section 10). No technology is chosen here beyond what spec §2 already fixes.
 
 Change log v1.1: day count by calendar days; automatic status transitions with manual override; revenue from completed bookings only (by return date); closed years correctable with versioned snapshots; 7-day grace on expiry; all extras in scope (admin new-booking email, owner emails, CSV exports, audit log); bookings fully editable by the admin; one admin per tenant with systemadmin recovery. Assumption numbering was rebuilt from scratch (A-1..A-39) and every reference re-checked.
+
+Change log v1.2 (GATE 2 deltas, decisions 2026-11-01): security level OWASP ASVS 4.0.3 L2; password minimum length 12; temporary passwords replaced by a one-time set-password link valid 24 h (SEC-3, deliberate deviation from spec §4; AC2 is satisfied by "the admin receives an activation email"); no card numbers or identity documents stored, with warnings on notes fields (SEC-5); vehicle photo limit 4 MB with client-side downscale (ARC-4); tenant termination procedure with export and hard deletion after 90 days (SEC-7); customer data export promoted to Must; mandatory SSRF guard on tenant SMTP host; health endpoints `/api/healthz` and `/api/readyz`. Accepted residual risks (no MFA, no SMTP-change re-authentication or notification, no CAPTCHA switch) are not requirements; see `docs/security/registro-rischi.md`.
 
 ---
 
@@ -103,22 +105,24 @@ M1 platform + auth + systemadmin + tenants/subscriptions (AC1, AC2) · M2 vehicl
 |---|---|---|---|
 | FR-AUTH-01 | Login with username + password for operator/admin at `/{slug}/admin/login`; usernames unique within a tenant (A-1). | M | §4 |
 | FR-AUTH-02 | Separate systemadmin login at `/system/login`; systemadmin accounts have no tenant. | M | §4, §8 |
-| FR-AUTH-03 | On creation of an admin/operator the system generates a random temporary password and emails it; account has `mustChangePassword = true`. | M | §4 |
-| FR-AUTH-04 | A user with `mustChangePassword` can access nothing but the change-password screen until changed. | M | §4 |
+| FR-AUTH-03 | **Activation link (SEC-3, replaces the spec's temporary password)**: on creation of a tenant admin, a replacement admin or an operator the system emails a one-time set-password link (token >= 128 bits, stored hashed, single use, valid 24 hours). No password is ever generated, emailed or displayed. The account cannot log in until the link has been used. | M | §4 (deviation) |
+| FR-AUTH-04 | An expired or used activation link shows an explanation and a way to ask for help; the creator (systemadmin for admins, admin for operators) can re-issue a new link, which invalidates the previous one. | M | §4 (deviation) |
 | FR-AUTH-05 | Password reset request for operator/admin sends a single-use, time-limited link through the tenant SMTP; for systemadmin through the system SMTP. | M | §4 |
 | FR-AUTH-06 | Reset response is identical whether or not the account exists (no enumeration). | M | §4 |
-| FR-AUTH-07 | Password policy: min 10 characters, not equal to username, not in a common-password list (A-2). | M | §10 |
+| FR-AUTH-07 | Password policy: min 12 characters, not equal to username, not in a common-password list (A-2). Applies to activation, reset and change. | M | §10 |
 | FR-AUTH-08 | Login throttling per account and per IP (A-3). | M | §10 |
 | FR-AUTH-09 | Server-validated session with inactivity and absolute expiry; logout invalidates it (A-4). | M | §3 |
 | FR-AUTH-10 | A deactivated user cannot log in; existing sessions stop working. | M | §9 |
-| FR-AUTH-11 | Temporary password valid 7 days, reset link 60 minutes (A-2); admin (for operators) or systemadmin (for the admin) can regenerate a temporary password. | S | §4 |
+| FR-AUTH-11 | Activation link valid 24 hours, reset link 60 minutes (A-2); re-issuing is covered by FR-AUTH-04. | M | §4 |
 | FR-AUTH-12 | Auth module exposes a documented extension point for additional factors (OTP/biometrics), not implemented. | M | §4 |
 | FR-AUTH-13 | Every request to tenant routes is authorised by role and tenant. | M | §10 |
 
 **US-001 Admin first login** (M · FR-AUTH-03/04)
-- Given a new admin with a temporary password, When I log in with it, Then I am redirected to change-password and cannot open any other page.
-- Given a valid new password, When I submit, Then `mustChangePassword` is cleared and I land on the admin home.
-- Given a password violating the policy, When I submit, Then I see which rule failed and nothing changes.
+- Given a new admin who received an activation email, When I open the link within 24 hours, Then I can set my own password and, once saved, I am logged in or sent to the login page.
+- Given the link was already used, When I open it again, Then it is refused with an explanation.
+- Given the link is older than 24 hours, When I open it, Then it is refused and I am told to ask the creator for a new one; the creator can re-issue it and the old link stops working.
+- Given a password shorter than 12 characters or otherwise violating the policy, When I submit, Then I see which rule failed and the link stays usable until it expires.
+- Given an account whose link was never used, When someone tries to log in, Then login fails with the generic message.
 
 **US-002 Password reset** (M · FR-AUTH-05/06)
 - Given a registered account, When I request a reset, Then an email is sent through the tenant SMTP (operator/admin) or system SMTP (systemadmin) with a link valid 60 minutes, single use.
@@ -146,19 +150,21 @@ M1 platform + auth + systemadmin + tenants/subscriptions (AC1, AC2) · M2 vehicl
 | FR-SYS-06 | Edit and renew a subscription at any time; one current subscription per tenant (A-6). | M | §5 |
 | FR-SYS-07 | Subscription states: `active`, `expired`, `cancelled`. `expired` is derived when the end of endDate (tenant time zone) has passed. After expiry the tenant is in a 7-day **grace period** (derived, not stored), then read-only (REQ-5, FR-SYS-13). `cancelled` is set manually and has no grace (A-8). | M | §5 |
 | FR-SYS-08 | Limit enforcement: adding a vehicle or active operator beyond the limit is rejected with a clear message naming the limit and usage. Lowering a limit below current usage deletes nothing; it only blocks additions. | M | §5 |
-| FR-SYS-09 | Create the first admin of a new tenant (name, username, email); temporary password emailed through the system SMTP. | M | §8 |
+| FR-SYS-09 | Create the first admin of a new tenant (name, username, email); activation link (FR-AUTH-03) emailed through the system SMTP. | M | §8 |
 | FR-SYS-10 | "Send test email" using a tenant's SMTP config. | S | §5 |
 | FR-SYS-11 | Subscription price/currency are informational and independent from the tenant currency (A-14). | M | §5 |
 | FR-SYS-12 | **Suspended tenant** (REQ-5, A-7): effective immediately, no grace. Public site shows a neutral "temporarily unavailable" page; admin/operator login rejected with a clear message and existing sessions invalidated; data retained; systemadmin unaffected. | M | §4 |
 | FR-SYS-13 | **Expired subscription** (REQ-5): during the 7-day grace period everything works normally (public site bookable, admin writable) and the admin sees a renewal banner (shown from 14 days before endDate through grace, A-8). After grace the tenant becomes read-only: the public site shows "bookings unavailable" and does not accept new bookings; staff can view everything; **existing bookings remain valid**; the operations in FR-ENF-01 stay allowed. Renewal lifts read-only immediately. | M | §5 |
 | FR-SYS-14 | Owner emails to `SYSTEM_ADMIN_EMAIL` via the system SMTP: on tenant creation, and 14 days before a subscription ends (once per subscription period, idempotent). Also sent to the tenant admin (renewal reminder, same moment). | M | §2, §3, REQ-14 |
-| FR-SYS-15 | **Admin access recovery** (REQ-16): systemadmin can reset the tenant admin's password (new temporary password via system SMTP) or replace the admin (create a new admin and deactivate the old one: same tenant, one active admin at all times). The action is audit-logged and invalidates the old admin's sessions. | M | §8, REQ-16 |
+| FR-SYS-15 | **Admin access recovery** (REQ-16): systemadmin can reset the tenant admin's access (new reset/activation link via system SMTP; the old password and sessions stop working) or replace the admin (create a new admin and deactivate the old one: same tenant, one active admin at all times). The action is audit-logged and invalidates the old admin's sessions. | M | §8, REQ-16 |
+| FR-SYS-16 | **Tenant termination (SEC-7)**: when a tenant ends its contract the systemadmin marks it terminated (suspended, no access for staff and public), delivers a tenant data export (bookings, customers, expenses, vehicles, revenue as CSV plus photo/logo files) to the tenant admin, and **hard-deletes all tenant data, including files and backups-aging per A-31, 90 days after termination**. The deletion date is recorded and shown; the owner is reminded before it; the deletion is an audited systemadmin procedure with a confirmation step (replaces the "manual purge" of A-15). | M | SEC-7 |
+| FR-DAT-01 | **No sensitive documents (SEC-5)**: the system never stores card numbers (PAN) or identity/driving-licence documents or their numbers. All free-text notes fields (vehicle notes, booking notes, expense description, customer notes if any) display a visible warning: "Do not enter card numbers or identity document data." Payment remains a method + paid flag only. | M | SEC-5 |
 | FR-ENF-01 | Read-only enforcement is one central policy. In read-only (expired after grace, or cancelled subscription) all state-changing admin operations are rejected with an explanatory message and disabled in the UI, **except**: login, change own password, password reset, logout, recording payments on existing bookings, and status updates of existing bookings (automatic transitions, manual active/completed, and cancellation) (A-9). Not allowed: creating or editing bookings (dates/vehicle), vehicles, expenses, operators, settings, branding. | M | §5 |
 
 **US-010 Create tenant with subscription** (M · FR-SYS-02/05/09 · AC2)
-- Given valid data, When I save the tenant, subscription and first admin, Then the tenant is reachable at `/{slug}`, the admin receives a temporary password via the system SMTP, and the owner receives the "tenant created" email.
+- Given valid data, When I save the tenant, subscription and first admin, Then the tenant is reachable at `/{slug}`, the admin receives an activation email with a 24-hour set-password link via the system SMTP (this satisfies AC2), and the owner receives the "tenant created" email.
 - Given a slug in use or reserved, When I save, Then a validation error appears and nothing is created.
-- Given the email cannot be sent, When creation completes, Then the tenant exists, I am told the email failed, and I can regenerate and resend the password.
+- Given the email cannot be sent, When creation completes, Then the tenant exists, I am told the email failed, and I can re-issue and resend the activation link.
 - Given a double submit, Then only one tenant/admin is created.
 
 **US-011 Suspend / reactivate tenant** (M · FR-SYS-04/12)
@@ -186,7 +192,7 @@ M1 platform + auth + systemadmin + tenants/subscriptions (AC1, AC2) · M2 vehicl
 - Given "Send test email", When pressed, Then success or the SMTP error summary (no secrets) is shown.
 
 **US-016 Recover tenant admin access** (M · FR-SYS-15)
-- Given a tenant admin who lost access and email, When the systemadmin replaces the admin with a new person, Then the new admin gets a temporary password via system SMTP, the old admin is deactivated and cannot log in, and there is never more than one active admin.
+- Given a tenant admin who lost access and email, When the systemadmin replaces the admin with a new person, Then the new admin gets an activation link via system SMTP, the old admin is deactivated and cannot log in, and there is never more than one active admin.
 - Given a reset on the same admin, Then the old password and sessions stop working and the action appears in the audit log.
 
 **US-017 Owner notifications** (M · FR-SYS-14)
@@ -282,7 +288,7 @@ M1 platform + auth + systemadmin + tenants/subscriptions (AC1, AC2) · M2 vehicl
 | FR-VEH-02 | Fixed lists: categories (city, compact, sedan, SUV, van, convertible, luxury, other) and fuel types (petrol, diesel, hybrid, plug-in hybrid, electric, LPG/CNG) (A-20). | M | §6.2 |
 | FR-VEH-03 | Status: stored statuses are `available` and `maintenance` (REQ-9). "Maintenance" is a simple "in maintenance now" toggle; while on, the vehicle is excluded from all public searches. `rented` is displayed, derived from an active booking, never stored. | M | §7.2 |
 | FR-VEH-04 | Turning maintenance on does not cancel existing future bookings; the admin sees a warning listing them. Admin-created future bookings on a vehicle in maintenance are rejected (past bookings are exempt, A-24). | M | §6.2 |
-| FR-VEH-05 | Photos: multiple upload (JPEG/PNG/WebP, <= 5 MB each, <= 10 per vehicle, A-23), reorder, cover, delete; via storage adapter; validated by content. | M | §2, §7.2 |
+| FR-VEH-05 | Photos: multiple upload (JPEG/PNG/WebP, <= 4 MB each after processing, <= 10 per vehicle, A-23), automatically downscaled on the client before upload (ARC-4; the server still enforces the limit and re-validates content), reorder, cover, delete; via storage adapter. | M | §2, §7.2 |
 | FR-VEH-06 | List with search by name/plate and filters (status, category); detail with bookings and expenses summary. | M | §7.2 |
 | FR-VEH-07 | Changing the daily price affects new bookings only (snapshot, FR-BKG-05); recomputation on booking edit uses the snapshot rule in FR-BKG-16. | M | §9 |
 | FR-VEH-08 | A vehicle with bookings or expenses is archived, not deleted (hidden from public/new bookings, kept in history and revenue, not counted toward maxVehicles) (A-18). Otherwise it can be deleted. | M | gap |
@@ -294,7 +300,9 @@ M1 platform + auth + systemadmin + tenants/subscriptions (AC1, AC2) · M2 vehicl
 **US-040 Add vehicle** (M · FR-VEH-01/05)
 - Given valid fields and 2 photos, Then the vehicle appears in the list and, if not in maintenance, in public results.
 - Given a duplicate plate in the same tenant, Then a validation error; the same plate in another tenant is accepted.
-- Given a non-image or >5 MB file, Then the upload is rejected with a clear message.
+- Given a non-image or a file over 4 MB reaching the server, Then the upload is rejected with a clear message.
+- Given a 12 MB phone photo selected in the browser, Then it is downscaled client-side below the limit before upload and accepted.
+- Given the vehicle notes field is focused, Then the warning of FR-DAT-01 is visible.
 - Given the limit is reached, Then FR-SYS-08 applies.
 
 **US-041 Maintenance toggle** (M · FR-VEH-03/04)
@@ -404,7 +412,7 @@ M1 platform + auth + systemadmin + tenants/subscriptions (AC1, AC2) · M2 vehicl
 | FR-CUS-04 | Admin can edit customer contact data. | S | gap |
 | FR-CUS-05 | Admin can merge two customer records. | C | gap |
 | FR-CUS-06 | GDPR: admin can anonymise a customer (name, phone, email replaced by irreversible placeholders; bookings, amounts, revenue kept). Blocked while the customer has open (confirmed/active) bookings. | M | GDPR |
-| FR-CUS-07 | GDPR: admin can export a customer's data (contact details and history) as a file. | S | GDPR |
+| FR-CUS-07 | GDPR: admin can export a customer's data (contact details and history) as a downloadable file (CSV/JSON), audit-logged. | M | GDPR |
 | FR-CUS-08 | Customer data is scoped to its tenant; the same person at two tenants is two unrelated customers. | M | §10 |
 | FR-CUS-09 | Yearly privacy reminder (REQ-12): every January a job emails the tenant admin the number of customers with no booking for 24 months or more, with a link to review/anonymise them. No automatic deletion. | M | REQ-12 |
 
@@ -421,6 +429,19 @@ M1 platform + auth + systemadmin + tenants/subscriptions (AC1, AC2) · M2 vehicl
 - Given a customer with past bookings, When the admin anonymises after confirmation, Then name/phone/email are unretrievable in lists, details, bookings, regenerated PDFs, CSV exports and logs, while amounts and dates stay and revenue is unchanged.
 - Given an open (confirmed/active) booking, Then anonymisation is blocked with an explanation.
 
+**US-065 Export customer data** (M · FR-CUS-07)
+- Given a customer with 3 bookings, When the admin exports their data, Then the file contains contact details and the 3 bookings (code, vehicle, dates, amount, status, paid) and an audit entry records the export.
+- Given an anonymised customer, Then the export contains only the anonymised placeholders and bookings.
+- Given a customer of another tenant, Then the export is refused (not found).
+
+**US-066 Terminate a tenant** (M · FR-SYS-16)
+- Given a tenant is terminated on day 0, Then access is blocked immediately, a data export is generated and delivered to the admin, and the deletion date (day 90) is recorded.
+- Given day 90 is reached and the systemadmin confirms, Then all tenant rows and files are deleted, only a minimal tombstone (tenant id, slug reserved, dates) remains, and an audit event is stored in the platform log.
+- Given the export was not delivered, Then deletion is blocked until the systemadmin overrides it with a reason.
+
+**US-067 Sensitive data warning** (M · FR-DAT-01)
+- Given any notes or description field, When I open the form, Then the warning is displayed; and no field or table for card numbers or identity documents exists.
+
 **US-063 Tenant isolation of customers** (M · FR-CUS-08)
 - Given the same phone booked at tenants A and B, Then each tenant sees only its own record.
 
@@ -431,16 +452,17 @@ M1 platform + auth + systemadmin + tenants/subscriptions (AC1, AC2) · M2 vehicl
 
 | ID | Requirement | Pri | Spec |
 |---|---|---|---|
-| FR-OPR-01 | Admin creates an operator (name, username, email); temporary password emailed through the tenant SMTP. | M | §7.5 |
+| FR-OPR-01 | Admin creates an operator (name, username, email); activation link (FR-AUTH-03) emailed through the tenant SMTP. | M | §7.5 |
 | FR-OPR-02 | Operators are view-only with a fixed permission set: calendar, bookings (with customer contacts), vehicles (no expenses). No customer list, revenue, expenses, settings, audit log (REQ-11). | M | §4, §7.5 |
-| FR-OPR-03 | Admin lists, edits (name, email), deactivates/reactivates operators and regenerates a temporary password. | S | gap |
+| FR-OPR-03 | Admin lists, edits (name, email), deactivates/reactivates operators and re-issues the activation link (FR-AUTH-04). | S | gap |
 | FR-OPR-04 | Active operators count toward maxOperators (FR-SYS-08). | M | §5 |
-| FR-OPR-05 | If the tenant SMTP is missing or fails, the admin sees it and can regenerate and communicate a password; a temporary password is shown only in the email, or once to the admin who regenerates it when email is unavailable (A-26). | M | §4 |
+| FR-OPR-05 | If the tenant SMTP is missing or fails, the admin sees the delivery failure and can re-issue the activation link after fixing the SMTP settings; links and passwords are never displayed on screen (A-26). | M | §4 |
 
 **US-070 Create operator** (M · FR-OPR-01)
-- Given valid data, Then the operator exists, receives a temporary password by email and must change it on first login.
+- Given valid data, Then the operator exists in "pending activation" state, receives an activation email with a 24-hour one-time set-password link, and can log in only after setting a password of at least 12 characters.
+- Given the link expired unused, When the admin re-issues it, Then a new email is sent and the old link no longer works.
 - Given a username already used in this tenant, Then a validation error.
-- Given the email fails, Then the operator is marked "credentials not delivered" and the admin can resend.
+- Given the email fails, Then the operator is marked "activation not delivered" and the admin can re-issue the link.
 
 **US-071 Operator view-only** (M · FR-OPR-02 · AC8)
 - Given an operator is logged in, When browsing calendar, bookings and vehicles, Then no create/edit/cancel/payment/delete control is shown, and customer name, phone and email are visible in booking detail.
@@ -518,7 +540,7 @@ M1 platform + auth + systemadmin + tenants/subscriptions (AC1, AC2) · M2 vehicl
 | FR-BRD-03 | Hover, disabled and on-color variants computed automatically. | M | §10.2 |
 | FR-BRD-04 | WCAG AA contrast checked live (4.5:1 text, 3:1 large text/UI); warnings list failing pairs with a suggested fix. Saving allowed with warnings unless a pair is < 3:1, which is blocked (A-29). | M | §10.2, AC11 |
 | FR-BRD-05 | Light default; dark follows the device; tenant setting auto/light/dark. | M | §10.2 |
-| FR-BRD-06 | Tenant SMTP settings editable by admin; password encrypted; test email action. | M | §7.7 |
+| FR-BRD-06 | Tenant SMTP settings editable by admin; password encrypted; test email action. **SSRF guard (mandatory)**: the SMTP host is resolved and validated on save, on test and on every send; only allowlisted ports (25, 465, 587, 2525) are accepted; hosts resolving to private, loopback, link-local or otherwise internal addresses (including cloud metadata addresses) are refused with a clear message; the same guard applies to settings set by the systemadmin (FR-SYS-03). | M | §7.7 |
 | FR-BRD-07 | Font from a short self-hosted list (Inter, Manrope, Plus Jakarta Sans). | M | §10.2 |
 | FR-BRD-08 | Logo upload (PNG/JPEG/WebP, <= 1 MB, A-23); responsive in header; alt text required when a logo is set. | M | §10.2 |
 | FR-BRD-09 | Tenant settings also include: contact info; **booking rules** (min duration default 1 day, max default 30 days, lead time default 0, buffer between rentals default 0, REQ-8; no opening hours); **privacy notice and rental terms** (link or text each, REQ-12); new-booking email toggle (FR-MAIL-07). Time zone and currency are set at creation and locked once a vehicle or booking exists (A-14). | M | §5, REQ-8, REQ-12 |
@@ -556,12 +578,12 @@ M1 platform + auth + systemadmin + tenants/subscriptions (AC1, AC2) · M2 vehicl
 
 | ID | Requirement | Pri | Spec |
 |---|---|---|---|
-| FR-MAIL-01 | Tenant emails (booking confirmation, admin new-booking notification, operator/admin temporary passwords and resets initiated by the tenant, renewal reminder copy, yearly privacy reminder) go through the tenant SMTP; system emails (systemadmin reset, first-admin and replaced-admin passwords, owner notifications) through the environment SMTP. Where a tenant has no SMTP, system-originated tenant reminders use the system SMTP (A-10). | M | §2, §4, §8 |
-| FR-MAIL-02 | Templates (plain text + HTML, English): temporary password, reset, booking confirmation (+PDF), new-booking notification, owner notifications, renewal reminder, privacy reminder. Tenant-sent mails are branded. | M | §6.4 |
+| FR-MAIL-01 | Tenant emails (booking confirmation, admin new-booking notification, operator activation links and resets, renewal reminder copy, yearly privacy reminder) go through the tenant SMTP; system emails (systemadmin reset, first-admin and replaced-admin activation links, owner notifications) through the environment SMTP. Where a tenant has no SMTP, system-originated tenant reminders use the system SMTP (A-10). | M | §2, §4, §8 |
+| FR-MAIL-02 | Templates (plain text + HTML, English): account activation link, reset, booking confirmation (+PDF), new-booking notification, owner notifications, renewal reminder, privacy reminder. Tenant-sent mails are branded. | M | §6.4 |
 | FR-MAIL-03 | Tenant without SMTP: no tenant emails; persistent admin warning; booking flow unaffected. | M | gap |
 | FR-MAIL-04 | Delivery result (sent/failed + error summary, no secrets) recorded per email; visible to the admin for bookings and operators; resend available. | S | gap |
 | FR-MAIL-05 | Email sending never blocks or fails a booking; bounded by timeout; must work in a serverless request or via a job adapter. | M | NFR-SRV-01 |
-| FR-MAIL-06 | Emails never contain secrets; temporary passwords expire (FR-AUTH-11). | M | §4 |
+| FR-MAIL-06 | Emails never contain passwords or secrets; the only credential-like content is a single-use, expiring link (FR-AUTH-11). | M | §4 |
 | FR-MAIL-07 | **New-booking notification (REQ-14)**: on each new public booking an email goes to the tenant admin's address with code, vehicle, dates, customer name and phone, total. On by default; the admin can switch it off in settings. Failure does not affect the booking. | M | REQ-14 |
 | FR-PDF-01 | Server-side PDF booking summary: code, vehicle, dates (tenant time zone), customer, daily price, billed days, total, payment note (pay on site), tenant branding, and the line "This document is a booking summary, not an invoice or receipt" (REQ-13). | M | §2, §6.4 |
 | FR-PDF-02 | Generated on demand from stored data (screen download, email, admin re-download); after an edit the regenerated PDF reflects the current data (A-30). | M | §6.4 |
@@ -620,7 +642,7 @@ M1 platform + auth + systemadmin + tenants/subscriptions (AC1, AC2) · M2 vehicl
 | FR-PLT-03 | Data access and storage behind repository/adapter interfaces; `DATABASE_URL` / `STORAGE_PROVIDER` change needs no code change; providers `local` and `s3`. | M | §2, AC10 |
 | FR-PLT-04 | Tenant resolution has exactly one entry point (request in, tenant or not-found out), currently by `/{slug}`, so host-based resolution can be added without touching business code. | M | discovery C12 |
 | FR-PLT-05 | Scheduled work (status transitions, year-end snapshots, subscription expiry and reminders, yearly privacy reminder) behind a job adapter, triggerable by an authenticated external scheduler or the container; all jobs idempotent and safe concurrently. | M | R-5 |
-| FR-PLT-06 | Health endpoint (liveness + DB reachability) with no sensitive data. | M | §2 |
+| FR-PLT-06 | Two health endpoints with no sensitive data and no tenant data: `/api/healthz` (liveness: process up, no dependency checks) and `/api/readyz` (readiness: database reachable and migrations applied; returns a non-2xx status otherwise). Used by the Docker healthcheck and external probes. | M | §2 |
 | FR-PLT-07 | Reserved namespace `/system`, `/api`, static paths cannot be slugs. | M | §6, §8 |
 | FR-PLT-08 | Structured JSON logs with request id, tenant id, user id (no customer PII, no secrets); error tracking/metrics behind an adapter (free tier optional). | M | discovery G30 |
 | FR-PLT-09 | Environment validated at startup; fail fast without printing secrets. | M | §3 |
@@ -676,13 +698,14 @@ M1 platform + auth + systemadmin + tenants/subscriptions (AC1, AC2) · M2 vehicl
 | NFR-ISO-01 | Tenant isolation | Every tenant-owned table carries `tenantId`; every query is scoped through a mandatory data-access layer. Reading/writing another tenant's resource by id returns not-found/forbidden. Zero leaks, including audit log, CSV exports and snapshots. | Automated cross-tenant tests for every entity and API route (spec §10), blocking in CI |
 | NFR-ISO-02 | Isolation | Files stored under tenant-prefixed keys; no listing across tenants; uploads cannot overwrite other tenants' keys. | Test |
 | NFR-ISO-03 | Isolation | Caches and jobs keyed by tenant; no shared mutable state across tenants. | Review/test |
-| NFR-SEC-01 | Security | OWASP ASVS L1 minimum, L2 for authentication, session and access control (final level set by cybersecurity-manager). | Security review |
+| NFR-SEC-01 | Security | **OWASP ASVS 4.0.3 Level 2** for the whole application (decision of the cybersecurity-manager). Accepted residual risks until GATE 4 (no MFA with the extension point FR-AUTH-12 kept, no re-authentication or notification on SMTP changes, no CAPTCHA switch) are tracked in `docs/security/registro-rischi.md`, not as requirements. | Security review, ASVS L2 checklist |
 | NFR-SEC-02 | Security | Passwords hashed with argon2id or bcrypt (~250 ms); SMTP passwords encrypted at rest with an environment key (rotation procedure documented); secrets never logged or returned. | Test + review |
 | NFR-SEC-03 | Security | Server-side schema validation on every form/API route with max lengths; output encoding for user text. | Tests |
 | NFR-SEC-04 | Security | Session cookies HttpOnly, Secure (non-local), SameSite Lax or stricter; CSRF protection; security headers (CSP, HSTS, X-Content-Type-Options, frame-ancestors none, referrer policy). | Automated header test |
 | NFR-SEC-05 | Security | Rate limiting on login, password reset, search (5/min/IP) and public booking (10/h/IP); store must work without in-memory per-instance state (serverless). | Test |
 | NFR-SEC-06 | Security | Uploads: content-type allowlist verified by magic bytes, size limits, randomised keys, no SVG. | Test |
 | NFR-SEC-07 | Security | Booking codes >= 40 bits of entropy, reset tokens >= 128 bits, tokens stored hashed. | Review |
+| NFR-SEC-09 | Security | Outbound SMTP connections are made only to hosts that pass the SSRF guard (FR-BRD-06); the guard is re-checked at connect time (resolved IP), not only at save time. No card numbers or identity documents are stored (FR-DAT-01). | Test |
 | NFR-SEC-08 | Security | Dependency and secret scanning in CI; no known critical/high vulnerability at release. | CI |
 | NFR-GDPR-01 | Privacy | Each tenant is controller of its customers' data; the platform is processor (discovery D15). The owner provides a data-processing agreement (DPA) and a privacy-notice template; the tenant supplies its own notice and rental terms (REQ-12). A signed DPA and a configured notice are prerequisites for a tenant going live. | Legal review, go-live checklist |
 | NFR-GDPR-02 | Privacy | Public form collects only first name, last name, phone, optional email; IP-based rate-limit data expires within 24 h. | Review |
@@ -725,7 +748,7 @@ Additional data implied (for the database-architect):
 - Vehicle: archived flag, maintenance flag, photo order/cover (stored status only available/maintenance).
 - Booking: `source`, customer name snapshot, `paidAmount`, cancelledAt/reason, billed days, created timestamp; `endAt` is the effective return moment and the revenue attribution date.
 - Customer: normalised phone, anonymisedAt.
-- User: temporary password expiry, last login, failed-login counters; exactly one active admin per tenant (constraint).
+- User: activation state (pending/active), activation token (hashed, expiry, used), last login, failed-login counters; exactly one active admin per tenant (constraint).
 - RevenueYearSnapshot: `version`, `frozenAt`, `correctedAt`, `correctedBy`, `reason`; per-vehicle and global rows; previous versions kept.
 - AuditLog (append-only), PasswordResetToken (hashed), EmailLog, JobRun, RateLimit buckets, notification markers (to keep reminders idempotent).
 
@@ -783,7 +806,7 @@ Greenfield: no data to migrate. Dev seed of one systemadmin; production bootstra
 | ID | Assumption |
 |---|---|
 | A-1 | Usernames unique per tenant (login is per tenant); systemadmin usernames unique globally. |
-| A-2 | Password policy: >= 10 chars, no composition rules, common-password check; temporary password valid 7 days; reset link 60 minutes. |
+| A-2 | Password policy: >= 12 chars, no composition rules, common-password check; activation link valid 24 hours; reset link 60 minutes; links single use, tokens stored hashed. |
 | A-3 | Login lock: 5 failed attempts per account in 15 minutes triggers a 15-minute delay. |
 | A-4 | Session: 30 min inactivity, 12 h absolute for tenant users; 15 min / 8 h for systemadmin. |
 | A-5 | Slug: 3 to 40 chars, lowercase letters, digits, hyphens; immutable; reserved words blocked. |
@@ -796,7 +819,7 @@ Greenfield: no data to migrate. Dev seed of one systemadmin; production bootstra
 | A-12 | Booking code: 8 characters, uppercase letters and digits excluding ambiguous ones (0/O, 1/I/L), shown as `XXXX-XXXX`, random, globally unique, not sequential. |
 | A-13 | The systemadmin console shows tenant and subscription data and audit events of those, never customers or bookings. |
 | A-14 | Tenant currency (ISO 4217, default EUR) governs prices, expenses and revenue; the subscription currency is independent. Currency and time zone are locked once a vehicle or booking exists (changes done manually by the owner). |
-| A-15 | No tenant deletion in the UI (suspend only); permanent purge on request is a documented manual operation by the owner. |
+| A-15 | No self-service tenant deletion in the UI (suspend only); termination, export and hard deletion after 90 days is the systemadmin procedure of FR-SYS-16 (SEC-7). |
 | A-16 | The booking form shows "By continuing you acknowledge the privacy notice and rental terms" with links (not a pre-ticked consent box, processing being contractual). |
 | A-17 | Cancelled bookings are hidden in the calendar by default and shown on toggle. |
 | A-18 | A vehicle with any bookings or expenses is archived instead of deleted; archived vehicles do not count toward maxVehicles. |
@@ -804,10 +827,10 @@ Greenfield: no data to migrate. Dev seed of one systemadmin; production bootstra
 | A-20 | Category and fuel lists are fixed as in FR-VEH-02. |
 | A-21 | Payment tracking: one paid flag + method (card/cash) + `paidAmount`; no installments, deposits or refund records. |
 | A-22 | Periods are half-open [start, end); the buffer is applied symmetrically (a new booking conflicts if it starts before an existing end + buffer, or ends after an existing start − buffer); default buffer 0. |
-| A-23 | Upload limits: vehicle photos 5 MB, 10 per vehicle; logo 1 MB; JPEG/PNG/WebP. |
+| A-23 | Upload limits: vehicle photos 4 MB (client-side downscale), 10 per vehicle; logo 1 MB; JPEG/PNG/WebP. |
 | A-24 | Manual and edited bookings follow the same availability, buffer and duration rules as public ones (including minimum lead time for future starts, not for past bookings). A vehicle in maintenance blocks future bookings but not past ones. A past booking is created as `completed`. |
 | A-25 | Status after an edit is re-evaluated by time (see FR-BKG-17); a manual status set by the admin is not reverted by the automatic job. |
-| A-26 | A temporary password is shown only in the email, or once to the actor who regenerates it when email is unavailable. |
+| A-26 | Activation and reset links appear only in the email, never on screen. If the tenant SMTP does not work, the admin cannot activate a new operator until the SMTP is fixed (the link is then re-issued). |
 | A-27 | Revenue is attributed to the month of `endAt` in the tenant time zone, whole amount. A manual early completion sets `endAt` to the completion moment so the same field drives revenue; a late manual completion keeps the scheduled `endAt`. |
 | A-28 | The year-end job runs daily; it creates the snapshot of year Y for each tenant once its time zone has passed 1 Jan Y+1 00:00; plus lazy creation. A correction creates a new version synchronously. |
 | A-29 | Contrast: warn below AA; hard-block only below 3:1. |
@@ -872,7 +895,7 @@ All questions are closed. No new blocking question was identified.
 | AC | Statement (short) | Functional requirements | User stories | NFR |
 |---|---|---|---|---|
 | AC1 | `docker compose up` runs app + DB, auto migrations | FR-PLT-01, 02, 06, 09 | US-120 | NFR-PLG-01 |
-| AC2 | Systemadmin creates tenant + subscription; admin gets temporary password | FR-SYS-01..09, FR-SYS-14, FR-AUTH-03/04, FR-MAIL-01 | US-010, US-001, US-012, US-013, US-017 | NFR-SEC-02 |
+| AC2 | Systemadmin creates tenant + subscription; admin receives an activation email (set-password link, replaces the temporary password per SEC-3) | FR-SYS-01..09, FR-SYS-14, FR-AUTH-03/04/11, FR-MAIL-01 | US-010, US-001, US-012, US-013, US-017 | NFR-SEC-02 |
 | AC3 | Customer searches, sees only available vehicles, books, gets code + PDF | FR-PUB-01..09, 11, 12, FR-BKG-08/10, FR-MAIL-01/02, FR-PDF-01..05 | US-020, US-021, US-022, US-056, US-100, US-101 | NFR-PERF-01..03 |
 | AC4 | Overlapping bookings cannot both be confirmed | FR-BKG-08, 11, 16, FR-PUB-08 | US-023, US-055, US-140, US-141 | NFR-ISO-01 |
 | AC5 | Calendar sorted by name, month/week/day, highlights today | FR-CAL-01..08 | US-030, US-031, US-032 | NFR-TZ-01, NFR-PERF-04, NFR-A11Y-02 |
@@ -911,11 +934,13 @@ All questions are closed. No new blocking question was identified.
 ### 11.3 User decisions to requirements
 See section 10 (each REQ-n maps to requirement IDs and stories).
 
+GATE 2 deltas: ASVS 4.0.3 L2 → NFR-SEC-01 · password length 12 → FR-AUTH-07, A-2 · SEC-3 activation link → FR-AUTH-03/04/11, US-001, US-010, US-016, US-070 · SEC-5 → FR-DAT-01, US-067, NFR-SEC-09 · ARC-4 photo 4 MB → FR-VEH-05, US-040, A-23 · SEC-7 termination → FR-SYS-16, US-066, A-15 · customer export Must → FR-CUS-07, US-065 · SSRF guard → FR-BRD-06, NFR-SEC-09 · health endpoints → FR-PLT-06.
+
 ### 11.4 Discovery constraints to requirements
 Local Docker then Vercel + external Postgres: NFR-SRV-01, FR-PLT-05 · scale: NFR-SCL-01 · EU/GDPR: NFR-GDPR-01..07 · time zone/currency per tenant: NFR-TZ-01, A-14 · path-based slug with single resolution point: FR-PLT-04 · no alerting, free-tier monitoring: NFR-OBS-01..03, FR-PLT-08 · English only: NFR-I18N-01 · no payments: section 3.3.
 
 ### 11.5 Priority summary (MoSCoW)
 - Must: all requirements marked M (core of AC1..AC11, plus the user-approved extras: FR-SYS-14, FR-SYS-15, FR-MAIL-07, EP-14, FR-BKG-16/17).
-- Should: FR-AUTH-11, FR-SYS-10, FR-PUB-14, FR-CAL-06, FR-CAL-10, FR-CUS-04, FR-CUS-07, FR-OPR-03, FR-BKG-15, FR-BKG-19, FR-MAIL-04, FR-BRD-10, FR-REV-12, US-072.
+- Should: FR-SYS-10, FR-PUB-14, FR-CAL-06, FR-CAL-10, FR-CUS-04, FR-OPR-03, FR-BKG-15, FR-BKG-19, FR-MAIL-04, FR-BRD-10, FR-REV-12, US-072.
 - Could: FR-CAL-09, FR-CUS-05, FR-REV-08, FR-REV-13.
 - Won't (this version): FR-VEH-12 and everything in section 3.3.
