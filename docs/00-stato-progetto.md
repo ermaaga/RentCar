@@ -61,6 +61,7 @@ APPROVAZIONE_GO_LIVE: IN_ATTESA
 | 2026-11-01 | Security level OWASP ASVS 4.0.3 L2; password min length 12 | cybersecurity-manager | security/sign-off.md |
 | 2026-11-01 | Tenant data after termination: export, hard delete after 90 days (SEC-7) | User choice | 02-requisiti.md |
 | 2026-11-01 | No MFA, no SMTP-change controls, no CAPTCHA switch: residual risks ACCEPTED by user until GATE 4 | User acceptance | security/registro-rischi.md |
+| 2026-11-01 | SEO: only /{slug} root indexable (SEO-1); optional tenant short description ≤160 chars (SEO-3) and optional address (SEO-4); title ≤45 chars | User choice | 09-seo.md |
 | 2026-11-01 | UI: shadcn/ui on Tailwind, Lucide, per-tenant tokens | Spec constraint | spec §10.2 |
 
 ## Approval log
