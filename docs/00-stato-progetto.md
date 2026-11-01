@@ -50,6 +50,8 @@ APPROVAZIONE_GO_LIVE: IN_ATTESA
 | 2026-11-01 | Scale 1–10 tenants at launch, <50 in 12 months; Italy/EU; one currency + time zone per tenant | User answer | 01-discovery.md |
 | 2026-11-01 | Path-based `/{slug}` now; single tenant-resolution point for future custom domains | User answer | 01-discovery.md C12 |
 | 2026-11-01 | Full spec scope, no fixed deadline | User answer | 01-discovery.md B8 |
+| 2026-11-01 | Git: user creates the repository; one commit per completed task (English messages) | User request | — |
+| 2026-11-01 | CI: GitHub Actions running tests (lint, typecheck, unit, integration with Postgres, Playwright E2E incl. mobile viewports, security scans) on every push/PR — to be created in M0 by devops-engineer after GATE 3 | User request | 13-piano-implementazione.md (M0) |
 | 2026-11-01 | UI: shadcn/ui on Tailwind, Lucide, per-tenant tokens | Spec constraint | spec §10.2 |
 
 ## Approval log
