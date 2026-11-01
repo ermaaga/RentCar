@@ -52,6 +52,8 @@ APPROVAZIONE_GO_LIVE: IN_ATTESA
 | 2026-11-01 | Full spec scope, no fixed deadline | User answer | 01-discovery.md B8 |
 | 2026-11-01 | Git: user creates the repository; one commit per completed task (English messages) | User request | — |
 | 2026-11-01 | CI: GitHub Actions running tests (lint, typecheck, unit, integration with Postgres, Playwright E2E incl. mobile viewports, security scans) on every push/PR — to be created in M0 by devops-engineer after GATE 3 | User request | 13-piano-implementazione.md (M0) |
+| 2026-11-01 | No card numbers or identity documents stored anywhere (SEC-5) | User answer | 03-inputs/security-constraints.md |
+| 2026-11-01 | Production hosting, monthly budget, ops time and legal review (OPS-2, OPS-3, SEC-6, ARC-2, ARC-5, ARC-6) DEFERRED: focus on building the software locally first; decide before go-live. GATE 2 decides the code-level bundle only | User answer | 03-architettura.md |
 | 2026-11-01 | UI: shadcn/ui on Tailwind, Lucide, per-tenant tokens | Spec constraint | spec §10.2 |
 
 ## Approval log
