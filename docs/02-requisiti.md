@@ -1,12 +1,14 @@
 # Requirements: RentCar (multi-tenant car rental SaaS)
 
-Version 1.3 · 2026-11-01 · Owner: requirements-analyst · Status: GATE 1 content plus GATE 2 and Phase 4 wave A deltas (change log v1.3 below) (all REQ-1..REQ-16 questions answered and integrated)
+Version 1.4 · 2026-11-01 · Owner: requirements-analyst · Status: GATE 1 content plus GATE 2, Phase 4 wave A and wave B deltas (change log below) (all REQ-1..REQ-16 questions answered and integrated)
 Sources: `docs/spec/car-rental-spec.md` (primary), `docs/01-discovery.md`, `docs/00-stato-progetto.md`, `docs/pm/raid.md`, user answers to REQ-1..REQ-16 (2026-11-01).
 Language: English (decision 2026-11-01). Spec section references are written `§n`; spec acceptance criteria `AC1`..`AC11`.
 
 Conventions: priority uses MoSCoW (M/S/C/W). `A-nn` = assumption made by the analyst, to be confirmed (section 9). `REQ-n` = decision already taken by the user (section 10). No technology is chosen here beyond what spec §2 already fixes.
 
 Change log v1.1: day count by calendar days; automatic status transitions with manual override; revenue from completed bookings only (by return date); closed years correctable with versioned snapshots; 7-day grace on expiry; all extras in scope (admin new-booking email, owner emails, CSV exports, audit log); bookings fully editable by the admin; one admin per tenant with systemadmin recovery. Assumption numbering was rebuilt from scratch (A-1..A-39) and every reference re-checked.
+
+Change log v1.4 (Phase 4 wave B, 2026-11-01): visual direction **Clear** chosen (UI-1, with three borrowings, see `docs/04b-ui-design.md`; FR-UX-07 and FR-UX-13 follow that design system); FR-BRD-04 and A-29 rewritten to reference the contrast rules of `docs/04b-ui-design.md` §4.3 (UI-2: automatic darker shade for links and text-sized accents; block only pairs below 3:1 with no automatic fix; same function server-side on save).
 
 Change log v1.3 (Phase 4 wave A, 2026-11-01): booking code = 10 chars Crockford base32 (50 bits), unique per tenant (A-12, NFR-SEC-07); tenant fields: title max 45, optional description max 160, optional all-or-none address, generated OG image (FR-SYS-02, FR-PUB-14); pending-GATE-3 assumptions A-40 (tenant `country_code`, default IT) and A-41 (`dpa_signed_at`); SEO: only `/{slug}` root indexable, FR-PUB-14 promoted to Must, `PUBLIC_INDEXING_ENABLED` (default false); NFR-PERF-01 adds TTFB p75 <= 800 ms and JS <= 150 kB gzip on the public root; Agenda view added to the calendar (FR-CAL-02, NFR-A11Y-02); credential emails never stored or auto-retried (FR-MAIL-06).
 
@@ -549,7 +551,7 @@ M1 platform + auth + systemadmin + tenants/subscriptions (AC1, AC2) · M2 vehicl
 | FR-BRD-01 | Admin edits title, logo (with alt text), colors: primary, secondary, accent, background, text. | M | §7.7, §10.2 |
 | FR-BRD-02 | Branding applies to the public site and admin via per-tenant CSS variables. | M | §7.7, AC9 |
 | FR-BRD-03 | Hover, disabled and on-color variants computed automatically. | M | §10.2 |
-| FR-BRD-04 | WCAG AA contrast checked live (4.5:1 text, 3:1 large text/UI); warnings list failing pairs with a suggested fix. Saving allowed with warnings unless a pair is < 3:1, which is blocked (A-29). | M | §10.2, AC11 |
+| FR-BRD-04 | **Contrast gate (UI-2)**: the normative rule text is `docs/04b-ui-design.md` §4.3, which this requirement references instead of repeating. Summary: pairs are evaluated as the product uses them after derivation, in light and dark. Tenant primary used as link or text-sized colour is **adjusted automatically** to a derived darker `link` shade (informational, save allowed, shade and ratio shown); labels on primary/accent/secondary get an automatically chosen white or ink; muted text and focus rings are auto-corrected. Text on background between 3:1 and 4.5:1 gives a **warning** with a one-tap suggested colour (save allowed). **Save is blocked only when a pair has no automatic fix and is below 3:1** (in practice text on background), with the reason shown next to Save. Each row shows icon + word, never colour alone. The same function and thresholds run server-side on save (authoritative; the client panel is advisory). | M | §10.2, AC11 |
 | FR-BRD-05 | Light default; dark follows the device; tenant setting auto/light/dark. | M | §10.2 |
 | FR-BRD-06 | Tenant SMTP settings editable by admin; password encrypted; test email action. **SSRF guard (mandatory)**: the SMTP host is resolved and validated on save, on test and on every send; only allowlisted ports (25, 465, 587, 2525) are accepted; hosts resolving to private, loopback, link-local or otherwise internal addresses (including cloud metadata addresses) are refused with a clear message; the same guard applies to settings set by the systemadmin (FR-SYS-03). | M | §7.7 |
 | FR-BRD-07 | Font from a short self-hosted list (Inter, Manrope, Plus Jakarta Sans). | M | §10.2 |
@@ -844,7 +846,7 @@ Greenfield: no data to migrate. Dev seed of one systemadmin; production bootstra
 | A-26 | Activation and reset links appear only in the email, never on screen. If the tenant SMTP does not work, the admin cannot activate a new operator until the SMTP is fixed (the link is then re-issued). |
 | A-27 | Revenue is attributed to the month of `endAt` in the tenant time zone, whole amount. A manual early completion sets `endAt` to the completion moment so the same field drives revenue; a late manual completion keeps the scheduled `endAt`. |
 | A-28 | The year-end job runs daily; it creates the snapshot of year Y for each tenant once its time zone has passed 1 Jan Y+1 00:00; plus lazy creation. A correction creates a new version synchronously. |
-| A-29 | Contrast: warn below AA; hard-block only below 3:1. |
+| A-29 | Contrast: follows the rule of `docs/04b-ui-design.md` §4.3 (decision UI-2): automatic darker shade for links and text-sized accents, warning between 3:1 and 4.5:1 for text on background, block only below 3:1 when no automatic fix exists. |
 | A-30 | PDFs are generated on demand and not stored; an edited booking's resent PDF shows current data. |
 | A-31 | Backups retained <= 35 days. |
 | A-32 | English display formats: dates `DD Mon YYYY`, 24-hour time, amounts with currency symbol or ISO code and two decimals. |
