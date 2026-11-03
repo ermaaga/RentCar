@@ -1,6 +1,10 @@
 # SEO requirements: RentCar
 
-Version 1.0 · 2026-11-01 · Owner: seo-specialist · Status: proposal for PM review (Phase 4, wave A)
+Version 1.1 · 2026-11-03 · Owner: seo-specialist · Status: proposal for PM review (Phase 4, wave A)
+
+## Change log
+- **v1.1 (2026-11-03, decision FE-1)**: suspended and terminated tenants return **HTTP 200** with `noindex, nofollow` and the neutral page (no 503). 410 is not used anywhere. Hard-deleted tenants (slug tombstone) return 404. SEO-5 (503 versus 200 for suspended) is superseded and removed from the open questions. Updated: status table (section 5), SR-09 and section 10, go-live checks (section 15), Esito and questions.
+- **v1.0 (2026-11-01)**: first version.
 Inputs: `docs/02-requisiti.md` v1.2 (FR-PUB-01/13/14, FR-PLT-04/07, FR-BRD-01/08/09, NFR-PERF-01, NFR-GDPR-07, NFR-SEC-04), `docs/01-discovery.md` (C12, E20, E21, F23), `docs/03-architettura.md` and ADR-0010, 0012, 0014, `docs/spec/car-rental-spec.md` §6, `docs/03-inputs/security-constraints.md` §9.
 Language: English (documentation decision). Questions for the user are in Italian in the last section.
 
@@ -24,7 +28,7 @@ Requirement IDs in this document are `SR-nn` (SEO requirement). `SEO-n` is reser
 | Booking form, confirmation, unavailable, 404 | None | none | No |
 | Admin, system, API | None | none | No (SR-05) |
 
-Context, preliminary (WebSearch, 2026-11-01): generic queries such as "car rental Italy" are dominated by aggregators (e.g. Kayak). A single tenant page will not compete for those queries. Expected organic traffic is brand/name queries and direct links. No search volumes are assumed here; measure after go-live in Search Console (section 8).
+Context, preliminary (WebSearch, 2026-11-01): generic queries such as "car rental Italy" are dominated by aggregators (e.g. Kayak). A single tenant page will not compete for those queries. Expected organic traffic is brand/name queries and direct links. No search volumes are assumed here; measure after go-live in Search Console (section 14).
 
 ## 2. Rendering
 
@@ -63,7 +67,7 @@ Custom domains (design only, FR-PLT-04, not built):
 
 ## 5. Indexing directives and status codes per page type
 
-Applies to the meta robots tag **and** to the `X-Robots-Tag` header (the header works on every status code, including 404, 410 and 503).
+Applies to the meta robots tag **and** to the `X-Robots-Tag` header (the header works on every status code, including 404).
 
 | Public URL / tenant state | HTTP status | Robots | Canonical |
 |---|---|---|---|
@@ -72,8 +76,8 @@ Applies to the meta robots tag **and** to the `X-Robots-Tag` header (the header 
 | Booking form and any other public HTML sub-path (route names decided by frontend, assumption A-1) | 200 | `noindex, nofollow` | `{origin}/{slug}` |
 | Confirmation `…/{bookingCode}` | 200 | `noindex, nofollow` + `Cache-Control: no-store` | `{origin}/{slug}` |
 | Past grace or subscription cancelled (root and all public paths; FR-SYS-13) | 200 | `noindex, nofollow` | `{origin}/{slug}` |
-| Suspended or terminated, before deletion (FR-SYS-12, FR-SYS-16) | 503 | `noindex, nofollow` | none |
-| Hard-deleted tenant, slug tombstone (US-066) | 410 | `noindex, nofollow` | none |
+| Suspended or terminated, before deletion (FR-SYS-12, FR-SYS-16); neutral "temporarily unavailable" page, no search form (FE-1) | 200 | `noindex, nofollow` | `{origin}/{slug}` |
+| Hard-deleted tenant, slug tombstone (US-066); 410 not used (FE-1) | 404 | `noindex, nofollow` | none |
 | Unknown slug, unknown path, reserved word | 404 | `noindex, nofollow` | none |
 | `/system/*`, `/{slug}/admin/*`, `/api/*` | as the app returns | `X-Robots-Tag: noindex, nofollow` on every response | none |
 
@@ -122,7 +126,7 @@ Only the root has SEO-relevant metadata. Other pages get a title for accessibili
   - `name` (tenant title), `url` (canonical root), `logo` (absolute URL, if logo), `telephone` (E.164, if stored), `email` (if stored), `currenciesAccepted` (tenant currency), `paymentAccepted` = "Cash, Credit Card" (on-site payment, FR-PUB-07).
   - `address` (PostalAddress) only if SEO-4 = option A and the address is stored.
   - No `openingHours` (not modelled, REQ-8), no `priceRange` (prices vary by vehicle and date), no customer data.
-- Implementation rules: `<script type="application/ld+json">`; serialise with `<` escaped as `<` so tenant text cannot close the script tag; values come from validated fields only.
+- Implementation rules: `<script type="application/ld+json">`; serialise the JSON with the `<` character escaped as the Unicode escape `<` so tenant text cannot close the script tag; values come from validated fields only.
 - Google rich-result eligibility for `AutoRental` was **not confirmed** from a primary source (preliminary search, secondary sources only). The markup is for correctness; do not promise a rich result. Check with the Rich Results Test and the schema.org validator in the audit.
 - Not worth doing: `Product`/`Offer`/`Vehicle` on results (dynamic, noindex, date-dependent prices); `AggregateRating`/`Review` (there is no review data, and invented ratings violate Google's guidelines); `FAQPage` (no FAQ content); `BreadcrumbList` (one page); `WebSite` with `SearchAction` (no site search).
 
@@ -145,11 +149,12 @@ Only the root has SEO-relevant metadata. Other pages get a title for accessibili
 ## 10. Tenant states and HTTP behaviour (summary)
 
 - **Unknown slug**: real 404 status with a generic page and noindex. Never a 200 page that says "not found" (soft 404).
-- **Suspended** (FR-SYS-12): 503 with the neutral "temporarily unavailable" page and the tenant's contact details, no search form. Google's guidance (secondary sources): a 503 keeps already-indexed URLs during a temporary outage; a long 503 period lowers crawl rate. `Retry-After` is optional and not required. Reactivation returns 200 on the next request, because tenant state is not cached (ADR-0014).
-- **Past grace or cancelled** (FR-SYS-13): 200, "bookings unavailable" with contact details, no search form, noindex. This is a valid human page, not an outage, so it does not use 503. Existing bookings stay valid (their confirmation pages remain available as noindex).
-- **Terminated** (FR-SYS-16): as suspended (503) until the deletion date. After hard deletion, the slug is a tombstone and returns 410 (SR-09).
+- **Suspended** (FR-SYS-12): 200 with the neutral "temporarily unavailable" page and the tenant's contact details, no search form, `noindex, nofollow` (FE-1). Reactivation returns the normal page on the next request, because tenant state is not cached (ADR-0014).
+- **Past grace or cancelled** (FR-SYS-13): 200, "bookings unavailable" with contact details, no search form, `noindex, nofollow`. Existing bookings stay valid (their confirmation pages remain available as noindex).
+- **Terminated** (FR-SYS-16): same as suspended (200, noindex) until the deletion date. After hard deletion, the slug is a tombstone and returns 404 (FE-1; 410 not used).
+- Consequence accepted under FE-1: Google does not get a 503 signal during a suspension; a suspended tenant's page is dropped from the index by the noindex on the next crawl. Reactivation brings it back on a later crawl.
 - **Renewal** lifts the state on the next request (US-012).
-- **SR-09** Status codes are the real protocol status everywhere. No 200 for errors, no 302 to a generic home page.
+- **SR-09** Status codes are the real protocol status everywhere, with the FE-1 rule: a tenant page that exists (active, grace, read-only, suspended, terminated) returns 200; an unknown or deleted slug returns 404. No 503 and no 410 anywhere. No 200 for errors, no 302 to a generic home page.
 
 ## 11. Security and privacy interactions
 
@@ -174,7 +179,7 @@ Targets for the public flow (`/{slug}`, results, booking form), mobile, 4G simul
   - Native `input type="date"` and `type="time"` where they fit the mobile design (less JavaScript, better for INP). Final call with ux-designer.
   - No third-party requests on public pages (FR-PUB-13).
 - Field data (Chrome UX Report, Search Console Core Web Vitals report) will not exist for low-traffic tenants. Lab data is the only measure in phase 1.
-- Cold start on the production database can add latency to the first request after idle (ADR-0010, spike S1). See SEO-5.
+- Cold start on the production database can add latency to the first request after idle (ADR-0010, spike S1). See SEO-6.
 
 ## 13. Migration
 
@@ -191,7 +196,7 @@ Not applicable. The product is greenfield (discovery A5); there is no existing s
 - `PUBLIC_INDEXING_ENABLED=true` in production; `false` in staging and previews.
 - Production root: `index, follow`, one canonical equal to `{APP_BASE_URL}/{slug}`, no `X-Robots-Tag` noindex.
 - Staging and previews: `X-Robots-Tag: noindex, nofollow` and deployment protection on every response.
-- Unknown slug → 404 (not 200). Suspended → 503. Hard-deleted → 410.
+- Unknown slug → 404 (not 200). Hard-deleted slug → 404. Suspended or terminated → 200 with `noindex, nofollow` and the neutral page. No 503 and no 410 anywhere (FE-1).
 - robots.txt reachable; no sitemap line.
 - Title, description and H1 on the root; OG tags with image URL that returns 200 and is a JPEG.
 - JSON-LD valid on the root; no fields with placeholder values.
@@ -228,7 +233,7 @@ Verification method: HTTP status and headers with `curl` (no browser needed); re
 | SEO-2 | L'interfaccia resta in inglese (decisione F23), ma i clienti italiani cercano in italiano. Come gestiamo la lingua della pagina pubblica? | A (raccomandata): interfaccia in inglese. Ogni noleggiatore può scrivere una descrizione breve nella propria lingua (vedi SEO-3) / B: riaprire la decisione e tradurre la pagina pubblica in italiano | B è un lavoro di traduzione e di i18n più grande e cambia una decisione già presa in discovery. A mantiene il piano, ma lascia la descrizione nelle mani del noleggiatore | no |
 | SEO-3 | Aggiungiamo un campo facoltativo "descrizione breve" (max 160 caratteri) nelle impostazioni del noleggiatore? | A (raccomandata): sì, facoltativo; se è vuoto si usa un testo automatico in inglese / B: no, solo il testo automatico | A aggiunge un campo al modulo delle impostazioni (piccolo lavoro, un campo in più da validare). Il testo del noleggiatore è quello che Google mostra nei risultati | no |
 | SEO-4 | Aggiungiamo l'indirizzo del noleggiatore (via, CAP, città) come campo facoltativo? | A (raccomandata): sì, facoltativo. Serve per i dati strutturati e per le ricerche locali tipo "noleggio auto <città>" / B: no, solo telefono ed email | La città è il segnale principale per le ricerche locali. L'indirizzo di un'impresa è dato pubblico. Costa un campo e la validazione | no |
-| SEO-5 | Quando un noleggiatore è sospeso, che risposta dà la pagina pubblica? | A (raccomandata): codice 503 (servizio temporaneamente non disponibile) con la pagina neutra. Google tende a conservare la pagina nell'indice per un periodo / B: codice 200 con la pagina neutra e noindex. Google la toglie dai risultati in poco tempo | Il cliente vede la stessa pagina in entrambi i casi. Cambia solo cosa succede nei risultati di Google se la sospensione dura settimane | no |
+| SEO-5 | Superata da FE-1 (2026-11-03): un noleggiatore sospeso o terminato restituisce 200 con noindex e pagina neutra; nessun 503 e nessun 410. Nessuna domanda aperta. | — | — | no |
 | SEO-6 | Il database di produzione si sospende quando è inattivo (piano a consumo, ADR-0010). Il primo visitatore dopo un periodo di inattività aspetta circa 1 secondo in più. Accettiamo questo? | A (raccomandata): sì, risparmiamo sul costo. Misuriamo nello spike S1 e rivediamo se il tempo di risposta supera 800 ms / B: no, il database resta sempre attivo | Il costo mensile della opzione B va quantificato da devops (non ancora stimato). Impatta il primo caricamento e la lentezza percepita sulla pagina principale | no |
 
 ## Esito
@@ -237,7 +242,7 @@ Verification method: HTTP status and headers with `curl` (no browser needed); re
 - **Sintesi**:
   1. Only `/{slug}` (root, no query) is indexable; results, booking form, confirmation, error and unavailable states are `noindex`.
   2. Canonical is `{origin}/{slug}` built by `canonicalUrl(tenant, path)`, never from the Host header; custom-domain rules (301 from platform origin, host policy) are specified but not built.
-  3. Status codes: 200 active, 200+noindex past grace or cancelled, 503 suspended or terminated, 410 after hard deletion, 404 unknown slug.
+  3. Status codes (FE-1): 200 active; 200 + noindex past grace, cancelled, suspended or terminated; 404 unknown or hard-deleted slug. No 503, no 410.
   4. Environment switch `PUBLIC_INDEXING_ENABLED` (default false) controls indexing; staging and previews are noindex and protected.
   5. No sitemap (enumeration risk, no benefit below 50 tenants); robots.txt does not disallow admin or system paths.
   6. Root metadata: title `{tenant title} | Car rental`, description (tenant or template), OG with a generated 1200×630 JPEG from the logo, JSON-LD `AutoRental` with present fields only.
@@ -255,11 +260,9 @@ Verification method: HTTP status and headers with `curl` (no browser needed); re
 - **Modifiche richieste a 02-requisiti.md** (da instradare al project manager): FR-PUB-14 da S a M per le regole noindex e di stato; FR-BRD-01 con titolo massimo 45 caratteri; nuova variabile `PUBLIC_INDEXING_ENABLED`; NFR-PERF-01 con TTFB e budget JS.
 - **Coordinamento**: security-engineer deve confermare le intestazioni della conferma (`Referrer-Policy: no-referrer`, `Cache-Control: no-store`) e la conferma dell'escaping JSON-LD (sezione 11). ux-designer deve confermare il modulo di ricerca (input nativi data/ora, GET) e il testo alternativo delle foto veicolo (sezione 7).
 - **Fonti (ricerca preliminare, secondarie)**:
-  - https://www.engageweb.co.uk/blog/what-google-has-to-say-about-503-status-codes
-  - https://www.searchenginejournal.com/google-on-the-seo-impact-of-503-status-codes/514255/
   - https://frontendchecklist.io/rules/seo/robots-meta-conflict
   - https://www.kayak.com/Italy-Car-Rentals.118.crc.html
   - https://ahrefs.com/websites/kayak.it (traffico di terzi, non verificato)
 
 ## Domande per l'utente (riepilogo)
-Vedi la tabella sopra: SEO-1 (indicizzazione), SEO-2 (lingua), SEO-3 (descrizione), SEO-4 (indirizzo), SEO-5 (stato sospeso), SEO-6 (cold start). Nessuna è bloccante: le opzioni raccomandate sono già scritte nel documento.
+Vedi la tabella sopra: SEO-1 (indicizzazione), SEO-2 (lingua), SEO-3 (descrizione), SEO-4 (indirizzo), SEO-6 (cold start). SEO-5 è superata dalla decisione FE-1. Nessuna domanda è bloccante: le opzioni raccomandate sono già scritte nel documento.
