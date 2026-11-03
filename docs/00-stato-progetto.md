@@ -10,10 +10,10 @@ APPROVAZIONE_GO_LIVE: IN_ATTESA
 ## Summary
 - **Traffic light**: 🟢 on track · reason: discovery in progress, full spec received
 - **Original request**: multi-tenant car rental SaaS — full spec in `docs/spec/car-rental-spec.md`
-- **Current phase**: 3 → 4 — closing architecture (03b code structure, ADRs accepted), requirements delta; then detailed design
-- **Next step**: Phase 4 wave A (UX, database, security threat model, SEO)
+- **Current phase**: 5 — GATE 3 questions and implementation approval
+- **Next step**: user answers 13-piano-implementazione.md §8.1; cybersecurity-manager plan sign-off; approval
 - **Feature in progress**: —
-- **Activity in progress**: solution-architect → 03b-struttura-codice.md + ADR status; requirements-analyst → GATE 2 delta in 02-requisiti.md
+- **Activity in progress**: PM → GATE 3 questions
 - **Decisions expected from the user**: none until requirements questions
 - **Open risks and issues**: see `docs/pm/raid.md`
 
@@ -24,8 +24,8 @@ APPROVAZIONE_GO_LIVE: IN_ATTESA
 | 1 | Discovery | done | 01-discovery.md |
 | 2 | Requirements — GATE 1 | done (approved) | 02-requisiti.md |
 | 3 | Architecture — GATE 2 | done (Option A) | 03-architettura.md, 03b-struttura-codice.md, adr/ |
-| 4 | Detailed design | to do | 04…12 |
-| 5 | Questions and approval — GATE 3 | to do | 13-piano-implementazione.md |
+| 4 | Detailed design | done | 04…12 |
+| 5 | Questions and approval — GATE 3 | in progress | 13-piano-implementazione.md |
 | 6 | Implementation | to do | reviews/, test-reports/ |
 | 7 | Pre-release verification | to do | reviews/, test-reports/ |
 | 8 | Documentation | to do | README, docs/manual/ |
