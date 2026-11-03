@@ -1,7 +1,8 @@
 # Backend design: RentCar (application services, entry points, auth, jobs, email, PDF, CSV, errors)
 
-Version 1.0 · 2026-11-01 · Owner: backend-developer · Phase 4 wave B · Mode: **analysis only** (no code; `APPROVAZIONE_IMPLEMENTAZIONE: IN_ATTESA`)
+Version 1.1 · 2026-11-03 · Owner: backend-developer · Phase 4 wave B · Mode: **analysis only** (no code; `APPROVAZIONE_IMPLEMENTAZIONE: IN_ATTESA`)
 Inputs read: `docs/02-requisiti.md` v1.3, `docs/03-architettura.md`, `docs/03b-struttura-codice.md` (binding), ADR-0001..0015, `docs/04a-ux.md`, `docs/05-database.md`, `docs/08-security.md` (SR-*, ABU-*), `docs/09-seo.md`, `docs/03-inputs/observability-options.md`.
+Change log v1.1 (GATE 3 answers, 2026-11-03): BE-1 A (customer anonymisation and resend of a confirmation email are allowed in read-only); BE-2 A (active-booking vehicle swap needs the new vehicle free for the whole period); BE-3 A (payments never create snapshot versions); BE-4 A (no customer email on cancel/edit); **BE-6 A (date-only edits keep the daily price agreed at booking; the current price is used only when the vehicle changes)**; SEC-12 A (admin and systemadmin reset links via system SMTP); **SEC-14 A (password pepper added to the auth flow)**; **FE-1 B (suspended/terminated tenant pages answer 200 + noindex; no 503/410; tombstoned slugs are a plain 404)**; DB-2 A and DB-4 A confirmed; **QA-1 A (CI-only clock hook, rejected outside `APP_ENV=ci`)**; FE-9 A (error `digest` logged and linked to the request id).
 Companion file: `docs/openapi.yaml` (public HTTP route handlers only; server actions are described here, not in OpenAPI).
 Language: all code, identifiers, error codes, event names and message keys in English. User-visible text only as message keys (section 14).
 
@@ -38,7 +39,7 @@ Language: all code, identifiers, error codes, event names and message keys in En
 | X6 | SR-AUT-04 says "every other case fails with the same generic page"; UX F-22 wants distinct messages (used / expired) | `peekCredentialLink` (GET, needs the 256-bit token) may return `used`, `expired`, `invalid`; the **POST** failure body is always the generic `CREDENTIAL_LINK_INVALID` | security-engineer to confirm |
 | X7 | FR-SYS-01 needs vehicle/operator counts per tenant and FR-BRD-09 locks time zone/currency "once a vehicle or booking exists", but the system scope has no policy on `vehicles` or on operator rows (05-database 4.5) | Request a `SECURITY DEFINER` function `platform_tenant_usage()` (system scope only; returns per tenant `vehicle_count`, `operator_count`, `has_bookings` and nothing else), like `platform_kpis` | database-architect |
 | X8 | SR-GDPR-06 needs a hashed single-purpose download token with expiry and 3-download cap for the termination export; 05-database 5.18 says no table was needed | Request columns on `tenants` (`export_token_hash bytea`, `export_expires_at`, `export_downloads smallint`) or a purpose `export_download` in `credential_tokens` | database-architect |
-| X9 | FR-ENF-01 lists the operations allowed in read-only; it does not mention customer anonymisation, customer export, resend of a confirmation email | Customer export and exports are allowed (FR-CSV-03 says exports work read-only); **anonymisation and resend are treated as blocked until the user answers BE-1** | user (BE-1) |
+| X9 | FR-ENF-01 lists the operations allowed in read-only; it does not mention customer anonymisation, customer export, resend of a confirmation email | Customer export and exports are allowed (FR-CSV-03 says exports work read-only); **anonymisation and resend of a confirmation are also allowed in read-only (user decision BE-1 A, 2026-11-03)**; FR-ENF-01 text to be amended by the requirements-analyst | requirements-analyst |
 | X10 | A-35 limits the audit log to the FR-AUD-01 list: vehicle, expense, operator events are not audited | Followed. Operator lifecycle is recorded as `security_event` (`auth.token.issued`, `auth.session.revoked`) only | requirements-analyst if they want more |
 | X11 | 03b section 8 names `RateLimitStore.hit(key, window, limit)`; lockout requires a read without increment, exports require a lease | Add `peek(key, window)` and `lease(key, ttlSeconds)` to the port (contract tests cover both adapters) | solution-architect (03b) |
 
@@ -99,7 +100,7 @@ type Actor =
 
 type ResolvedTenant = {
   scope: TenantScope;                                  // opaque, only from TenantResolver
-  status: 'active' | 'suspended' | 'terminated';       // 'deleted' resolves to not-found/410
+  status: 'active' | 'suspended' | 'terminated';       // 'deleted' (tombstone) resolves to the generic not-found
   access: EffectiveAccess;                             // section 4.4
   createdAt: Date; settings: PublicTenantSettings;     // title, contact, rules, legal, theme version (no secrets)
 };
@@ -230,9 +231,10 @@ Safe to repeat without extra effect: `logout`, `setMaintenance`, `changeBookingS
 1. Entry `loginStaff`/`loginSystem` (public action, realm picks counters). Resolve tenant from slug (staff). Unknown/tombstoned/reserved slug: generic not-found page (SR-ACC-07).
 2. RL-05 then RL-04 `peek`; if over limit: refuse **without hashing**, `RATE_LIMITED` + `retryAfterSeconds` (the correct password is refused as well, SR-AUT-05). Counters fail closed (SR-RL-04).
 3. Acquire the argon2 semaphore (default 4 per instance; excess -> `RATE_LIMITED`/503 within 1 s, SR-AUT-09).
+3b. All password hashing and verification (login, dummy verify, set-password, change, hard-delete confirmation) go through `PasswordHasher`, which feeds the **pepper** (SEC-14 A) to argon2id as its `secret` input; see 4.2.7.
 4. Find user by `(tenant_id, username)`. If missing, `pending` or `deactivated`: verify the submitted password against a **fixed dummy hash with the same parameters** (so exactly one verify runs on every path), record a failure (`hit` on RL-04 and RL-05), emit `auth.login.failure` (reason code only), return the single generic `INVALID_CREDENTIALS`.
 5. Verify hash. On failure: same as 4. On success: check tenant status. Suspended/terminated tenant **after valid credentials**: `TENANT_UNAVAILABLE` (clear message, FR-SYS-12); the system realm has no tenant.
-6. `SecondFactorVerifier.isRequired` (never true now). Rehash if parameters outdated (inside the same short tx as the session insert).
+6. `SecondFactorVerifier.isRequired` (never true now). Rehash if parameters or pepper id are outdated (inside the same short tx as the session insert).
 7. `withTenant`: insert session (new token), `users.last_login_at`; emit `auth.login.success`; set cookie; return `{ redirectTo }` (default `/{slug}/admin`; `next` accepted only if relative, single `/`, same realm, SR-VAL-08).
 8. If `must_change_password`: result carries `mustChangePassword: true`; the guard blocks everything else until `changePassword`.
 
@@ -243,13 +245,20 @@ Safe to repeat without extra effect: `logout`, `setMaintenance`, `changeBookingS
 - Two concurrent POSTs: exactly one wins (single `UPDATE ... RETURNING`), the other gets the generic error (ABU-M1-13).
 
 #### 4.2.3 Password reset request - UC-AUT-06/07
-Generic action `requestPasswordReset({ identifier })` (identifier = username or email, <= 254 chars). Always the same `{ accepted: true }` response with equal work done *before* returning: RL-06/RL-07, input validation, a constant-time delay is **not** used; instead all variable work (lookup, token issue, mail) runs in `runAfterResponse`. After response: find matching **active** accounts in the tenant (username equality or lower(email) equality, max 3), issue a `password_reset` token per account, send. Channel: tenant admin and systemadmin -> **system SMTP**; operator -> tenant SMTP (assumption 5.7 of 08-security, pending SEC-12). If the tenant SMTP is missing or fails: row `email_log.failed` with `last_error = 'no_smtp'|category`, shown to the admin in Settings > Email, never to the requester (US-002).
+Generic action `requestPasswordReset({ identifier })` (identifier = username or email, <= 254 chars). Always the same `{ accepted: true }` response with equal work done *before* returning: RL-06/RL-07, input validation, a constant-time delay is **not** used; instead all variable work (lookup, token issue, mail) runs in `runAfterResponse`. After response: find matching **active** accounts in the tenant (username equality or lower(email) equality, max 3), issue a `password_reset` token per account, send. Channel: tenant admin and systemadmin -> **system SMTP**; operator -> tenant SMTP (decision 5.7 of 08-security, confirmed by SEC-12 A). If the tenant SMTP is missing or fails: row `email_log.failed` with `last_error = 'no_smtp'|category`, shown to the admin in Settings > Email, never to the requester (US-002).
 
 #### 4.2.4 Change password, sessions - UC-AUT-08/09/10/11
 `changePassword({ currentPassword, newPassword, signOutOthers = true })`: current password required (verify under the same semaphore and RL-04-style account counter), policy, new hash, delete other sessions (default), new session token for the caller, notice email `notice.password_changed`. `listSessions` (own sessions: created, last seen, coarse UA, current flag), `revokeSessions({ sessionId | 'others', password })` requires re-entering the password (SR-SES-08, RL-20). `touchSession` extends idle expiry on the UX "stay signed in" dialog (read-write on `sessions` only; exempt from read-only).
 
 #### 4.2.5 Operators and admin recovery - UC-AUT-12..18
 Create operator: lock `limit:operators:{tenant}`, count `users` with `role='operator' AND status IN ('pending','active')`, compare with `subscriptions.max_operators` (US-013 concurrency), insert `pending` user, issue activation token, commit, send link via **tenant SMTP**, return `{ operator, activationEmail: 'sent'|'failed'|'no_smtp' }`; the operator list derives "Activation not delivered" from the latest `email_log` row (UX 6.2). Deactivate: set status, delete sessions, free the slot (US-072). System recovery: *issue access link* (same admin: `password_hash = NULL`, `status = 'pending'`, sessions deleted, fresh activation token, old address notified) and *replace admin* (one tx: deactivate old -> insert new -> issue token; unique index guarantees one active admin; old address notified; `platform_audit` + tenant `audit_log` `admin_account.replaced`). Concurrent replace: the second fails on `users_one_admin_per_tenant` -> `CONFLICT_ADMIN_EXISTS` (ABU-M1-32).
+
+#### 4.2.7 Password pepper (SEC-14 A, ASVS 2.4.5)
+- `PasswordHasher` calls `@node-rs/argon2` with `secret = pepper` (32 random bytes, base64 in `PASSWORD_PEPPER`; optional `PASSWORD_PEPPER_PREVIOUS`). The pepper is a **separate secret, not derived from `APP_ENCRYPTION_KEY`**, so rotating the encryption key never invalidates passwords. It is never stored in the DB, never logged, and is kept outside the backups' key custody.
+- Stored value in `users.password_hash`: `pv<id>$<argon2id encoded string>` where `<id>` is the first 8 hex chars of SHA-256 of the pepper (a key id, not a secret). Verification selects the pepper by id (current or previous); an unknown id fails closed. Hashes without the prefix do not exist (greenfield).
+- Rehash on successful login happens when the argon2 parameters are outdated **or** the stored pepper id is not the current one (this is the rotation path: deploy with new + `PASSWORD_PEPPER_PREVIOUS`, wait for logins, retire the old value; accounts that never log in must reset). Losing the pepper means every password must be reset through the set-password flow (documented in the runbook; `docs/05-database.md` only needs to allow the prefix in `password_hash`, no schema change).
+- The dummy hash used for unknown users is computed with the same pepper and parameters so all paths cost the same.
+- Config guard: `PASSWORD_PEPPER` required, >= 32 bytes, not an `INSECURE_DEV_` placeholder when production-like, different from every other secret. Tests: wrong pepper fails, rotation rehash, unknown id fails closed, pepper absent from logs/errors (canary).
 
 #### 4.2.6 Bootstrap systemadmin - UC-AUT-20 (CLI, not HTTP)
 `scripts/create-systemadmin.ts` (scope `bootstrap`): reads username/email from env or prompts; creates a `pending` systemadmin and an `activation` token; sends the link through the system SMTP and, if that fails, prints it **once** to stdout (the operator running the CLI is the owner; DB-A8, SR-AUT-13). Dev seed sets the password hash directly, refused when `APP_ENV` is production-like.
@@ -267,13 +276,13 @@ Legend: **P** public (no session), **O** operator, **A** admin, **S** systemadmi
 | Create/edit booking (BKG-06..08) | - | - | Y | - | **W** | Vehicle and customer must belong to the tenant |
 | Status change: active, complete, cancel (BKG-09) | - | - | Y | - | **RO** | Booking in tenant; effective status rules |
 | Payment (BKG-10) | - | - | Y | - | **RO** | same |
-| Resend confirmation (BKG-15) | - | - | Y | - | W until BE-1 | same |
+| Resend confirmation (BKG-15) | - | - | Y | - | **RO** (BE-1 A) | same |
 | Vehicles list/detail (no expenses) (FLT-05/06) | - | Y | Y | - | R | |
 | Vehicle create/edit/maintenance/archive/photos (FLT-01..04, 07..10) | - | - | Y | - | **W** | Vehicle in tenant |
 | Expenses CRUD (FIN-01..04) | - | - | Y | - | **W** | Expense and vehicle in tenant |
 | Revenue, snapshots, compare (FIN-05..08) | - | - | Y | - | R (lazy snapshot creation still allowed: system-originated) | |
 | Customers list/detail/update (CUS-01..03, 07) | - | - | Y | - | R / W (update) | Customer in tenant |
-| Anonymise customer (CUS-04) | - | - | Y | - | W until BE-1 | Customer in tenant |
+| Anonymise customer (CUS-04) | - | - | Y | - | **RO** (BE-1 A) | Customer in tenant |
 | Exports: bookings/customers/revenue/customer (BKG-17, FIN-10, CUS-05) | - | - | Y | - | **RO** | Filters parsed by schema; tenant scope |
 | Operators (AUT-12..16) | - | - | Y | - | **W** | Users with `role='operator'` of the tenant only |
 | Settings: rules, contact, legal, notifications, branding, SMTP (TEN-11..15, BRD-*, NTF-01..04) | - | - | Y | Y (via system entry point, BE-D7) | **W** (tenant realm); system entry point unaffected | Own tenant row |
@@ -306,11 +315,11 @@ Legend: **P** public (no session), **O** operator, **A** admin, **S** systemadmi
 | `write` | refused `TENANT_READ_ONLY` (HTTP 403, key `errors.tenant.readOnly`) | refused |
 | `ro_allowed` | allowed | refused |
 
-`ro_allowed` set (exact, from FR-ENF-01): login, logout, change own password, reset request/redeem, touchSession, session list/revoke, `setPayment`, `changeBookingStatus` (mark active, complete, cancel), automatic transitions, CSV and customer exports. The public booking path uses `canTakeBookings`, not `canWrite`. System-originated writes (jobs, lazy snapshot creation, lazy status materialisation) are not subject to the policy (US-084). The list is data in the route registry; a test generates the allowed/blocked matrix per entry point (ABU-M3-03). Changing it requires a registry edit plus a requirement change.
+`ro_allowed` set (exact, from FR-ENF-01 plus BE-1 A): login, logout, change own password, reset request/redeem, touchSession, session list/revoke, `setPayment`, `anonymiseCustomer`, `resendConfirmation`, `changeBookingStatus` (mark active, complete, cancel), automatic transitions, CSV and customer exports. The public booking path uses `canTakeBookings`, not `canWrite`. System-originated writes (jobs, lazy snapshot creation, lazy status materialisation) are not subject to the policy (US-084). The list is data in the route registry; a test generates the allowed/blocked matrix per entry point (ABU-M3-03). Changing it requires a registry edit plus a requirement change.
 
-### 4.5 Public tenant states and HTTP status (09-seo section 5, for the frontend and the resolver)
+### 4.5 Public tenant states and HTTP status (09-seo section 5 as amended by FE-1 B: only unknown/tombstoned = 404; suspended, terminated and past-grace pages = 200 + `noindex, nofollow`; data routes `theme.css`, `/media`, PDF, exports still answer 404 for unavailable tenants)
 
-`TenantResolver.resolve` returns a discriminated result consumed by pages: `notFound` (unknown, reserved or malformed slug -> 404), `gone` (tombstone -> 410), `unavailable` (suspended/terminated -> 503), `ok` (with `access`; `read_only_*` -> page 200 "bookings unavailable"). Same generic page for unknown and reserved. No cross-request cache; `React.cache` memoises within one request only.
+`TenantResolver.resolve` returns a discriminated result consumed by pages: `notFound` (unknown, reserved, malformed or tombstoned slug -> the same generic 404), `unavailable` (suspended/terminated -> the neutral "temporarily unavailable" page with **HTTP 200 and `noindex`**, FE-1 B; no 503 and no 410 for pages), `ok` (with `access`; `read_only_*` -> page 200 "bookings unavailable"). Same generic page for unknown and reserved. No cross-request cache; `React.cache` memoises within one request only.
 
 ---
 
@@ -375,7 +384,7 @@ stateDiagram-v2
 | auto confirmed->active | job `booking_status_advance` (hourly) or lazy materialisation | `start_at <= now` | audit `booking.status_changed` (actor system, `auto`) |
 | auto active->completed | same | `end_at <= now` (`completed` is applied first so a booking passing both bounds ends `completed`) | audit; revenue now counts it (already counted live, see 5.5) |
 | manual mark active | `changeBookingStatus(target:'active')` | effective status `confirmed`; admin; allowed in read-only | `status='active'`; the job never reverts it (never backwards) |
-| manual complete | `changeBookingStatus(target:'complete')` | effective `active` (a `confirmed` booking whose start has passed is materialised to `active` first); `now > start_at` else `BOOKING_COMPLETE_BEFORE_START` | if `now < end_at`: `end_at = now`, re-price with `price()` (days touched from start to now; **current vehicle daily price**, FR-BKG-04 -> FR-BKG-16; assumption A-BE-3), audit `booking.updated` + status change; if `now >= end_at`: `end_at` unchanged; paid flag and `paidAmount` kept, balance recomputed |
+| manual complete | `changeBookingStatus(target:'complete')` | effective `active` (a `confirmed` booking whose start has passed is materialised to `active` first); `now > start_at` else `BOOKING_COMPLETE_BEFORE_START` | if `now < end_at`: `end_at = now`, re-price with `price()` (days touched from start to now; **the booking's own daily price snapshot**, BE-6 A), audit `booking.updated` + status change; if `now >= end_at`: `end_at` unchanged; paid flag and `paidAmount` kept, balance recomputed |
 | cancel | `changeBookingStatus(target:'cancel', reason?)` | effective `confirmed` or `active`; `completed` -> `BOOKING_INVALID_TRANSITION` ("edit instead"); allowed in read-only | `status='cancelled'`, `cancelled_at`, `cancel_reason`; vehicle freed (constraint ignores cancelled); not revenue; audit `booking.cancelled` |
 | edit | `updateBooking` | per FR-BKG-17, 5.4 | status re-derived, price re-computed, audit `booking.updated`, closed-year correction if needed |
 | repeat to current status | any | - | no-op `ok` |
@@ -390,11 +399,11 @@ Inputs: `{ code, expectedVersion, changes: { startAt?, endAt?, vehicleId?, notes
 | Effective status | start | end | vehicle | Status after | Notes |
 |---|---|---|---|---|---|
 | `confirmed` | free | free | free | `deriveStatus(newStart,newEnd)` | lead time applies only if the new start is changed to a future time |
-| `active` | **locked** (`BOOKING_START_LOCKED`) | editable, `>= now` (`BOOKING_END_IN_PAST`) - extension or early return | swap allowed (semantics pending BE-2; default A: the new vehicle must be free for the **whole** booking period) | `active` | |
+| `active` | **locked** (`BOOKING_START_LOCKED`) | editable, `>= now` (`BOOKING_END_IN_PAST`) - extension or early return | swap allowed; the new vehicle must be free for the **whole** booking period (BE-2 A, enforced by the exclusion constraint) | `active` | |
 | `completed` | free | free | free | re-evaluated by time (end in future -> `active`; start in future -> `confirmed`) | revenue and closed-year snapshot recomputed |
 | `cancelled` | - | - | - | - | `BOOKING_NOT_EDITABLE` |
 
-Common steps (all inside one `withTenantRetry`): lock vehicles `veh:` in ascending id order (old and new); `SELECT ... FOR UPDATE` the booking; compare `version`; materialise effective status; validate (min/max days, archived/maintenance target, 15-minute steps, local time validity); pre-check conflict with `AND b.id <> $self` to name the conflicting booking (admin sees the code); `price()` with the **current daily price of the target vehicle**; recompute `buffer_minutes` with the **current** tenant buffer when dates or vehicle change (DB-4) and let the trigger recompute `blocked_during`; compute `affectedYears` (5.5); run `RevenueImpactPort.withCorrection(...)` around the UPDATE (`SET ..., version = version + 1 WHERE id AND version = $v`); map `23P01` -> `BOOKING_CONFLICT`; audit `booking.updated` with `{ startAt, endAt, vehicleId, billedDays, dailyPriceMinor, totalMinor, status }` old/new (SR-AUD-04; notes -> `changed` marker + length). Payment fields are untouched; the DTO shows `balanceMinor = total - paidAmount` (positive "amount due", negative "overpaid"; no automatic refund, US-143).
+Common steps (all inside one `withTenantRetry`): lock vehicles `veh:` in ascending id order (old and new); `SELECT ... FOR UPDATE` the booking; compare `version`; materialise effective status; validate (min/max days, archived/maintenance target, 15-minute steps, local time validity); pre-check conflict with `AND b.id <> $self` to name the conflicting booking (admin sees the code); `price()` with the **booking's existing `daily_price_minor` when the vehicle is unchanged (date-only edit, BE-6 A)** and with the **current daily price of the new vehicle when the vehicle changes** (the snapshot is replaced); recompute `buffer_minutes` with the **current** tenant buffer when dates or vehicle change (DB-4) and let the trigger recompute `blocked_during`; compute `affectedYears` (5.5); run `RevenueImpactPort.withCorrection(...)` around the UPDATE (`SET ..., version = version + 1 WHERE id AND version = $v`); map `23P01` -> `BOOKING_CONFLICT`; audit `booking.updated` with `{ startAt, endAt, vehicleId, billedDays, dailyPriceMinor, totalMinor, status }` old/new (SR-AUD-04; notes -> `changed` marker + length). Payment fields are untouched; the DTO shows `balanceMinor = total - paidAmount` (positive "amount due", negative "overpaid"; no automatic refund, US-143).
 
 ### 5.5 Revenue and snapshot recompute paths (REQ-3, REQ-4, FR-REV-*) - `finance`
 
@@ -408,7 +417,7 @@ A year `Y` is **closed** when `now >= local 1 Jan Y+1 00:00` in the tenant time 
 | Edit of a booking that was or will be counted as revenue | `BKG-08` | local year of old `end_at` if the booking was effectively completed before; local year of new `end_at` if it is effectively completed after (an edit may move it in or out of a year) |
 | Manual early completion | `BKG-09` | none in practice (`end_at = now`, current year); computed anyway by the same function |
 | Booking cancelled | `BKG-09` | none (a completed booking cannot be cancelled; active/confirmed are not revenue) |
-| Payment recorded/cleared (`collected` column) | `BKG-10` | **proposal: none** (payments never create versions; a later version captures the current collected). Pending user decision BE-3 |
+| Payment recorded/cleared (`collected` column) | `BKG-10` | **none** (payments never create versions; a later version captures the current collected). User decision BE-3 A |
 | Vehicle archive, customer anonymisation | - | none (amounts unchanged) |
 | Any path forgotten (manual SQL) | nightly `snapshot_reconcile` | all closed years, `reason = 'reconciliation'` |
 
@@ -430,7 +439,7 @@ Notation: **Entry** `A` = server action (`app/actions/<module>/<verbNoun>.ts`), 
 
 | ID · Entry | Input | Auth | Tx · side effects | Output | Errors · refs · ABU |
 |---|---|---|---|---|---|
-| **TEN-01** `TenantResolver.resolve({host,pathname})` · I | path `/{slug}/...` (later host) | none | `S:resolve` (tenants SELECT limited columns, slug_tombstone); current subscription read under `T` only when the tenant is active (settings public columns) | `ResolvedTenant` or `notFound`/`gone`/`unavailable` | uniform 404 for unknown, reserved, tombstoned (SR-ACC-07) · FR-PUB-01, FR-PLT-04, US-122, US-025 · M1-30/31, M5-06 |
+| **TEN-01** `TenantResolver.resolve({host,pathname})` · I | path `/{slug}/...` (later host) | none | `S:resolve` (tenants SELECT limited columns, slug_tombstone); current subscription read under `T` only when the tenant is active (settings public columns) | `ResolvedTenant` or `notFound`/`unavailable` | uniform 404 for unknown, reserved, tombstoned (SR-ACC-07) · FR-PUB-01, FR-PLT-04, US-122, US-025 · M1-30/31, M5-06 |
 | **TEN-02** `checkSlugAvailability` · A | `{ slug }` | system:systemadmin · read | `S:system` read of `tenants`, `slug_tombstone` | `{ available, reason?: 'taken'|'reserved'|'invalid' }`, plus `url` preview | RL-18 · FR-SYS-02 (UX F-19) · M1-31 |
 | **TEN-03** `createTenant` · A | `{ name(1..120), slug, contact:{email,phone}, title(1..45), shortDescription?(<=160), address?:{street,postalCode,city,countryCode}(all or none), countryCode, timeZone(IANA, validated against `Intl.supportedValuesOf`), currency(ISO 4217), dpaSigned:true (required literal), subscription:{maxVehicles,maxOperators,startDate,endDate,priceMinor,priceCurrency}, admin:{displayName,username,email} }` | system:systemadmin · write (not subject to tenant policy) | One `S:system` tx: insert tenant (`active`), default `tenant_settings`, subscription (via `SubscriptionProvisioner`, overlap constraint), admin `pending` (via `TenantAdminProvisioner`) + activation token, `dpa_signed_at = now`, `platform_audit tenant.created`, tenant `audit_log` entries. After commit: **await** activation email via system SMTP (BE-D6); `after()` owner mail `owner.tenant_created` (to `SYSTEM_ADMIN_EMAIL`). | `{ tenantId, slug, tenantUrl, adminActivationEmail: 'sent'|'failed' }` | `SLUG_TAKEN`, `SLUG_RESERVED`, `SUBSCRIPTION_INVALID_PERIOD`, `USERNAME_TAKEN`(n/a first admin) · slug taken => nothing created · FR-SYS-02/05/09, US-010 (double submit: unique slug + pending UI), KPI-1 · M1-31, M1-16 |
 | **TEN-04** `updateTenantProfile` · A | `{ slug, name?, contact?, title?, shortDescription?, address?, countryCode?, timeZone?, currency?, dpaSigned? }` (slug in path only to identify; never changes) | system:systemadmin · write | `S:system`; time zone and currency may change only when `TenantUsagePort` reports no vehicle and no booking (X7) else `TENANT_LOCKED_FIELD`; audit `tenant.updated` (changed fields) | `TenantDetailDto` | `TENANT_LOCKED_FIELD`, `NOT_FOUND` · FR-SYS-03, A-14 |
@@ -506,7 +515,7 @@ Notation: **Entry** `A` = server action (`app/actions/<module>/<verbNoun>.ts`), 
 | **CUS-01** `listCustomers` · Q | `{ q?, sort?: name\|lastBooking\|bookings, pageParams }` | tenant:admin · read | `T`; aggregates bookings count / last booking | `Page<CustomerRowDto>` | FR-CUS-01 · M3-01 |
 | **CUS-02** `getCustomer` · Q | `{ id }` | admin · read | `T`; history newest first | `CustomerDetailDto` | `NOT_FOUND` · FR-CUS-02, US-060 |
 | **CUS-03** `updateCustomer` · A | `{ id, firstName?, lastName?, phone?, email?\|null, expectedUpdatedAt }` | admin · write | `T`; anonymised -> `CUSTOMER_ANONYMISED`; phone unique | `CustomerDto` | `CUSTOMER_PHONE_TAKEN`, `CUSTOMER_ANONYMISED` · FR-CUS-04 |
-| **CUS-04** `anonymiseCustomer` · A | `{ id, confirm:true }` | admin · write (BE-1) | 5.6, one `T` tx; audit + ledger; storage untouched | `{ anonymisedAt }` | `CUSTOMER_HAS_OPEN_BOOKINGS` · FR-CUS-06, US-062, SR-GDPR-04 · M3-06 |
+| **CUS-04** `anonymiseCustomer` · A | `{ id, confirm:true }` | admin · **ro_allowed** (BE-1 A) | 5.6, one `T` tx; audit + ledger; storage untouched | `{ anonymisedAt }` | `CUSTOMER_HAS_OPEN_BOOKINGS` · FR-CUS-06, US-062, SR-GDPR-04 · M3-06 |
 | **CUS-05** `exportCustomer` · **R** `POST /{slug}/admin/exports/customers/{customerId}` | form field `format=csv\|json` | admin · ro_allowed; RL-11 | `T`; not stored; audit `export.created` before first byte | file stream | `NOT_FOUND` · FR-CUS-07, US-065 · M3-07 |
 | **CUS-06** `resolveForBooking` · I | 5.6 | in BKG tx | | `{ customerId }` | FR-CUS-03 · M2-07 |
 | **CUS-07** `suggestCustomers` · Q | `{ q(2..64) }` | admin · read | `T`; name/phone ILIKE (escaped), limit 8; phone match first | `CustomerSuggestionDto[]` | UX F-10 |
@@ -530,7 +539,7 @@ Notation: **Entry** `A` = server action (`app/actions/<module>/<verbNoun>.ts`), 
 | **BKG-12** `getBooking` · Q | `{ code }` | O/A · read | `T`; includes `history` = `AUD-02` entries for the booking (admin only), email status, balance | `BookingDetailDto` | `NOT_FOUND` · FR-BKG-02, FR-BKG-14 · M3-13 |
 | **BKG-13** `getCalendar` · Q | `{ view:'grid'\|'month'\|'week'\|'day'\|'agenda', date: ISO local date, includeCancelled? }` (range <= 42 days) | O/A · read | `T`; range computed in tenant tz; vehicles natural-sorted case-insensitively; archived only if bookings in range; `rented` derived; bookings with effective status | `CalendarDto { vehicles, bookings, todayLocal, range }` (<= 5,000 bookings else `RANGE_TOO_LARGE`) | `RANGE_TOO_LARGE` · FR-CAL-01..10, US-030..033, NFR-PERF-04 |
 | **BKG-14** `getTodaySummary` · Q | - | O/A · read | `T`; pickups today, returns today, `needsAttention` (completed in last 14 days with balance > 0, max 20) | `TodayDto` | W-D1 |
-| **BKG-15** `resendConfirmation` · A | `{ code, toEmail? }` | admin · write (BE-1) | enqueue `booking.confirmation` row (PDF regenerated), `after()` dispatch | `{ emailStatus }` | `BOOKING_HAS_NO_EMAIL`, `SMTP_NOT_CONFIGURED` · FR-BKG-15, FR-MAIL-04 |
+| **BKG-15** `resendConfirmation` · A | `{ code, toEmail? }` | admin · **ro_allowed** (BE-1 A) | enqueue `booking.confirmation` row (PDF regenerated), `after()` dispatch | `{ emailStatus }` | `BOOKING_HAS_NO_EMAIL`, `SMTP_NOT_CONFIGURED` · FR-BKG-15, FR-MAIL-04 |
 | **BKG-16** `downloadBookingPdf` · **R** `GET /{slug}/admin/bookings/{code}/pdf` | path | O/A · read | as BKG-05 behind the guard | PDF | `NOT_FOUND` · FR-BKG-15 |
 | **BKG-17** `exportBookingsCsv` · **R** `POST /{slug}/admin/exports/bookings` | form fields = BKG-11 filters | admin · ro_allowed; RL-11 | 10.2 | CSV stream | `EXPORT_ROW_CAP_EXCEEDED`, `EXPORT_IN_PROGRESS` · FR-CSV-01..03, US-132 · M4-01..04 |
 | **BKG-18** `advanceStatuses` · J | `{ now }` per tenant | job | 5.3 SQL; audit per changed booking | `{ completed, activated }` | US-054 |
@@ -812,11 +821,11 @@ Rule: codes are stable English `SCREAMING_SNAKE_CASE`, never reused. `kind` (03b
 | `UNSUPPORTED_MEDIA_TYPE` | validation | 415 | `errors.generic.unsupportedMedia` | |
 | `RATE_LIMITED` | rate_limited | 429 | `errors.generic.rateLimited` | `retryAfterSeconds` |
 | `SERVICE_UNAVAILABLE` | unavailable | 503 | `errors.generic.tryAgain` | |
-| `INTERNAL_ERROR` | unavailable | 500 | `errors.generic.serverError` | `requestId` |
+| `INTERNAL_ERROR` | unavailable | 500 | `errors.generic.serverError` | `requestId`, `digest` (Next.js error digest, FE-9 A: logged as `error_digest` next to `request_id`, shown as the support reference; never a stack or message) |
 | `STALE_RECORD` | conflict | 409 | `errors.generic.staleRecord` | `changedAt` |
 | `RANGE_TOO_LARGE` | validation | 400 | `errors.generic.rangeTooLarge` | |
 | `INVALID_LOCAL_TIME` | validation | 400 | `errors.time.invalidLocal` | `field` |
-| `TENANT_UNAVAILABLE` | unavailable | 503 | `errors.tenant.unavailable` | |
+| `TENANT_UNAVAILABLE` | unavailable | 503 (route handlers only; pages render 200, FE-1 B) | `errors.tenant.unavailable` | |
 | `TENANT_READ_ONLY` | forbidden | 403 | `errors.tenant.readOnly` ("Unavailable while your subscription is read-only.") | |
 | `BOOKINGS_UNAVAILABLE` | unavailable | 503 | `errors.tenant.bookingsUnavailable` | |
 | `MUST_CHANGE_PASSWORD` | forbidden | 403 | `errors.auth.mustChangePassword` | |
@@ -896,7 +905,7 @@ Rule: codes are stable English `SCREAMING_SNAKE_CASE`, never reused. `kind` (03b
 
 ### 13.1 Log record (pino, JSON, stdout, UTC)
 
-Allowlist fields only (SR-LOG-01; see X4): `ts, level, event, message (constant English), service, env, version, request_id, tenant_id, user_id (staff only), realm, route_template, status, duration_ms, outcome, reason_code, error_code, ip_prefix, ip_hmac`. No names, phones, emails, free text, tokens, SMTP data, bodies, raw URLs or raw IPs. Redaction paths are a second line of defence; the canary test (ABU-M0-15) covers every use case that takes personal data. Levels: `error` = needs intervention; `warn` = handled anomaly; `info` = business and lifecycle events; `debug` off in production.
+Allowlist fields only (SR-LOG-01; see X4): `ts, level, event, message (constant English), service, env, version, request_id, tenant_id, user_id (staff only), realm, route_template, status, duration_ms, outcome, reason_code, error_code, ip_prefix, ip_hmac, error_digest` (FE-9 A). No names, phones, emails, free text, tokens, SMTP data, bodies, raw URLs or raw IPs. Redaction paths are a second line of defence; the canary test (ABU-M0-15) covers every use case that takes personal data. Levels: `error` = needs intervention; `warn` = handled anomaly; `info` = business and lifecycle events; `debug` off in production.
 
 ### 13.2 Event taxonomy (name = `domain.entity.action`, lowercase, stable)
 
@@ -959,9 +968,11 @@ Counters: `rentcar_http_requests_total{route_template,status_class,realm}`, `ren
 | `CRON_SECRET` | job Bearer | >= 32 bytes, distinct from every other secret |
 | `STORAGE_PROVIDER` (`local|s3`), `STORAGE_LOCAL_DIR`, `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE`, `UPLOAD_MAX_BYTES` (4,194,304), `TENANT_STORAGE_QUOTA_BYTES` (1 GB) | storage | `local` refused when production-like |
 | `SYSTEM_SMTP_HOST/PORT/SECURITY/USER/PASSWORD/FROM_ADDRESS/FROM_NAME`, `SYSTEM_ADMIN_EMAIL` | system mail and owner copy | TLS required |
+| `CI_CLOCK_HOOK` (false) | CI-only controllable clock for E2E (QA-1 A): the `Clock` adapter `ci-controlled` accepts a fixed/advanced `now` through an endpoint-free mechanism (a row-less in-process value set by the test harness via the `x-test-now` header on requests that carry the CI secret) | **boot fails** unless `APP_ENV=ci`; the header is ignored and logged as `config.invalid`/`access.denied` in any other environment; covered by a config test and a header-injection test |
 | `SMTP_DEV_ALLOW_PRIVATE` | Mailpit override | **boot fails** unless `APP_ENV=local` |
 | `EMAIL_DISPATCH_MODE` (`after|await`), `EMAIL_DAILY_CAP_PER_TENANT` (300) | email behaviour | |
 | `RATE_LIMIT_STORE` (`postgres|memory`), `TRUSTED_PROXY_COUNT` | limits, client IP | memory refused when production-like; count required |
+| `PASSWORD_PEPPER` (+ `PASSWORD_PEPPER_PREVIOUS`) | argon2 secret input (4.2.7) | required; >= 32 bytes; not a placeholder |
 | `AUTH_HASH_CONCURRENCY` (4), `ARGON2_MEMORY_KIB` (19456), `ARGON2_TIME_COST` (2), `ARGON2_PARALLELISM` (1) | hashing (tuned in spike S3) | |
 | `PDF_CONCURRENCY` (2), `UPLOAD_CONCURRENCY` (2) | resource caps | |
 | `JOBS_TIME_BUDGET_MS` (8000) | job budget | |
@@ -1050,9 +1061,9 @@ No variable disables rate limits, Origin checks or the SSRF guard. Secrets are n
 | BT-04 | Read-only policy matrix generated from the route registry equals the `ro_allowed` set of 4.4 | I |
 | BT-05 | Availability + buffer: US-020 scenarios (10:30 refused, 11:00 accepted with buffer 60), equal-instant back-to-back accepted | I |
 | BT-06 | Concurrency: 20 parallel overlapping creates => 1; two edits moving different bookings to one vehicle period => 1; parallel plan-limit creations at limit-1 => 1 | I |
-| BT-07 | Snapshot lifecycle: US-084 (exactly one v1 with job twice/rerun/lazy), US-085 (v2, v3, no version when unaffected, v1 created from pre-change state), payment does not create a version (pending BE-3), cancelled year boundaries 31 Dec 23:30 | I |
+| BT-07 | Snapshot lifecycle: US-084 (exactly one v1 with job twice/rerun/lazy), US-085 (v2, v3, no version when unaffected, v1 created from pre-change state), payment does not create a version (BE-3 A), cancelled year boundaries 31 Dec 23:30 | I |
 | BT-08 | Revenue reconciliation (KPI-4): per-vehicle sums equal global for random data | I |
-| BT-09 | Edit rules table 5.4: every row, including `IMPACT_CONFIRMATION_REQUIRED`, balance after edit (US-143) | I |
+| BT-09 | Edit rules table 5.4: every row, plus price rule BE-6 A (date-only edit/extension/early completion keeps the snapshot price even after the vehicle price changed; vehicle change uses the new vehicle's current price), including `IMPACT_CONFIRMATION_REQUIRED`, balance after edit (US-143) | I |
 | BT-10 | `previewBookingChange` result equals the `updateBooking` outcome | I |
 | BT-11 | Credential canary: after sending, no token or link exists in DB, logs, error reporter, job output | I |
 | BT-12 | Email outbox: backoff schedule, `SKIP LOCKED` double-claim, credential never retried, recipient scrub at 90 days | I |
@@ -1088,7 +1099,7 @@ No variable disables rate limits, Origin checks or the SSRF guard. Secrets are n
 | R-BE-3 | Closed-year correction logic is subtle (v1 must exist before the change, multiple years per edit, advisory locks) | alta | single `SnapshotCorrector`; BT-07; nightly reconcile as safety net |
 | R-BE-4 | Argon2id memory/CPU on serverless functions (cold start, memory 19 MiB x concurrent logins) | media | semaphore, tuned parameters (spike S3); bcrypt >= 12 fallback in `PasswordHasher` |
 | R-BE-5 | react-pdf / sharp memory and cold-start on Vercel | media | spikes S2; semaphores; sharp variants capped; fallback to VPS (code unchanged) |
-| R-BE-6 | Spec-level decision gaps on edits/payments in closed years (BE-2, BE-3, BE-6) | media | defaults documented; `repriceFor(edit)` and snapshot trigger set are single functions |
+| R-BE-6 | Spec-level decision gaps on edits/payments in closed years (BE-2, BE-3, BE-6) | low | all three decided at GATE 3; `repriceFor(edit)` and the snapshot trigger set remain single functions |
 | R-BE-7 | Date library correctness at DST boundaries | media | BT-01/BT-13 vectors in 4 zones; Temporal polyfill as swap option behind `shared/time` |
 | R-BE-8 | Termination export links are credential-like but sent from a job; a failed send must not leave a retryable stored body | media | job awaits the send; on failure the systemadmin re-triggers (`jobs: ['termination_export']`); never persisted |
 | R-BE-9 | Termination export may exceed one invocation's time budget on serverless | media | resumable per table (`counts`), dedicated invocation, `maxDuration`; spike S6 |
@@ -1102,13 +1113,13 @@ No variable disables rate limits, Origin checks or the SSRF guard. Secrets are n
 |---|---|
 | A-BE-1 | The honeypot/form-token failure returns a decoy success with a well-formed random code; its confirmation URL returns the normal 404 (documented limitation of SR-RL-05). |
 | A-BE-2 | A vehicle in maintenance blocks any admin-created booking whose `endAt > now` (bookings spanning now count as future). |
-| A-BE-3 | Until BE-6 is answered, edits and early completion re-price with the target vehicle's **current** daily price (literal FR-BKG-16). |
+| A-BE-3 | **Resolved by BE-6 A**: date-only edits, extensions, early returns and early completion keep the daily price agreed at booking; only a vehicle change re-prices at the new vehicle's current daily price. This is the binding interpretation of FR-BKG-16 (requirements-analyst to amend the wording). |
 | A-BE-4 | `previewBookingChange` + `acknowledgeImpact` are acceptable additions to the edit flow (they implement UX J3 "impact confirmation"). |
 | A-BE-5 | `not_started` subscriptions (start date in the future) behave as `active`. |
 | A-BE-6 | Expense dates may be at most 31 days in the future; earliest 2000-01-01. |
 | A-BE-7 | Reminder emails: renewal reminder window = from 14 days before end until the end of grace; privacy reminder sent only when the count is > 0 and only in the first 7 days of January in tenant time. |
 | A-BE-8 | Password reset by "username or email" may match up to 3 accounts of the tenant (emails are not unique); each gets its own link. |
-| A-BE-9 | Reset of tenant admin and systemadmin goes through the system SMTP (security assumption pending SEC-12). |
+| A-BE-9 | Confirmed by SEC-12 A: reset of tenant admin and systemadmin goes through the system SMTP; operators through the tenant SMTP. |
 | A-BE-10 | `resetBranding` keeps the logo. |
 | A-BE-11 | Operators receive no write capability of any kind, including payment and status changes (REQ-11). |
 | A-BE-12 | Booking list uses offset pagination with a 10,000-row ceiling (BE-D5). |
@@ -1127,13 +1138,13 @@ No variable disables rate limits, Origin checks or the SSRF guard. Secrets are n
 | qa-engineer | Registry-generated matrices (3.2); BT-01..17; fixtures: fake DNS, fake SMTP, FakeClock, MinIO. |
 | devops-engineer | Env list (14.2), `serverActions.bodySizeLimit`, `outputFileTracingIncludes` for fonts, `maxDuration` per route, job trigger body contract (`jobs`, `tenantSlug`). |
 
-### 16.5 Questions for the user (Italian summary in the Esito block; IDs `BE-n`)
+### 16.5 Questions for the user - all answered at GATE 3 (2026-11-03)
 
-| ID | Topic | Default used until answered |
+| ID | Topic | Answer |
 |---|---|---|
-| BE-1 | What a read-only tenant may still do about customer data (anonymise a customer, resend a confirmation email) | blocked (strict FR-ENF-01) |
-| BE-2 | Swapping the vehicle of a rental already in progress | new vehicle must be free for the whole booking |
-| BE-3 | Late payments on rentals of a closed year: new "corrected" snapshot version or not | no new version |
-| BE-4 | Email to the customer when the business cancels or changes a booking | no email (as in the requirements) |
-| BE-5 | Which mailbox/provider sends platform emails (activation links, resets, owner notices) | any SMTP over TLS from env; decided before go-live |
-| BE-6 | Price used when the end date of a running or finished rental is changed | vehicle's current price (literal FR-BKG-16) |
+| BE-1 | Read-only tenant: anonymise a customer, resend a confirmation | A: both allowed |
+| BE-2 | Vehicle swap of a rental in progress | A: new vehicle free for the whole period |
+| BE-3 | Late payments on closed years | A: no new snapshot version |
+| BE-4 | Customer email on cancel/edit | A: no email |
+| BE-5 | Platform email sender | still open, before go-live (no GATE 3 answer recorded) |
+| BE-6 | Price on date-only edits | A: keep the booking's agreed daily price; current price only if the vehicle changes |
