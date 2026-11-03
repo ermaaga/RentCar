@@ -65,6 +65,7 @@ APPROVAZIONE_GO_LIVE: IN_ATTESA
 | 2026-11-01 | Visual direction Clear + 3 borrowings (UI-1) | User choice | docs/design/index.html |
 | 2026-11-01 | Tenant colors: automatic darker shade for links/text, block only pairs with no automatic fix (UI-2; rewords FR-BRD-04/A-29) | User choice | 04b-ui-design.md |
 | 2026-11-03 | Suspended/terminated tenant public pages answer HTTP 200 + noindex (FE-1 = B; overrides SEO 503/410 proposal) | User choice | 07-frontend.md, 09-seo.md |
+| 2026-11-03 | All remaining GATE 3 questions in 13-piano-implementazione.md §8.1 answered with the recommended option (incl. SEC-14 pepper = yes, BE-6 = price agreed at booking, SEC-15 = link never shown) | User answer | 13-piano-implementazione.md §8.1 |
 | 2026-11-01 | UI: shadcn/ui on Tailwind, Lucide, per-tenant tokens | Spec constraint | spec §10.2 |
 
 ## Approval log

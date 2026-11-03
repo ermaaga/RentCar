@@ -71,6 +71,8 @@ Order follows `02-requisiti.md` §3.2. Every milestone ends with the quality loo
 Already answered or decided are not repeated (see `00-stato-progetto.md`). "Pre-GATE 4" items are deferred by the user's earlier choice to build the software first.
 
 ### 8.1 Needed before or during implementation
+
+> **Answered 2026-11-03**: the user accepted the recommended option (A) for every question in this table ("metti tutto raccomandato"); FE-1 answered B (200 + noindex).
 | ID | Question | Recommendation | Blocking | Agent |
 |---|---|---|---|---|
 | FE-1 | Real 503/410 status vs 200 + noindex | **ANSWERED 2026-11-03: 200 + noindex** | — | frontend/seo |
