@@ -1,6 +1,6 @@
 # Security risk register: RentCar
 
-Version 1.0 · 2026-11-01 · Owner: cybersecurity-manager · Status: opened at GATE 2 (design phase, no code yet)
+Version 1.1 · 2026-11-03 · Owner: cybersecurity-manager · Status: updated at GATE 3 (plan reviewed, still no code). Change log v1.1: section 3.8 (new risks R-PLAN-01..05), section 3.9 (planned control coverage per milestone), section 4 refreshed after the GATE 2 and GATE 3 decisions, no risk marked mitigated yet.
 Inputs: `docs/01-discovery.md`, `docs/02-requisiti.md` (v1.1), `docs/03-architettura.md`, `docs/adr/0001..0014`, `docs/03-inputs/security-constraints.md`, `docs/03-inputs/devops-costs.md`, `docs/03-inputs/observability-options.md`, `docs/pm/raid.md`.
 Language: English. Questions to the user are in Italian in the sign-off Esito.
 
@@ -121,6 +121,30 @@ Nothing is `mitigated` yet: no code exists. "Residual" is the expected level if 
 | R-IR-02 | Single-person dependency: owner unavailable, lost recovery codes, lost KEK or hosting account | M | M | Medium | Break-glass runbook, offline custody of KEK and recovery codes, a named deputy for hosting account recovery (CSM-2) | owner | Medium | needs acceptance |
 | R-IR-03 | Design stays unverified until code exists: ASVS L2 compliance cannot be claimed | H | M | High | Per-milestone sign-off with evidence; DAST on staging before Gate 4; independent test (CSM-3) | cybersecurity-manager | Low | open |
 
+### 3.8 New risks from the GATE 3 review (2026-11-03)
+
+| ID | Risk | P | I | Level | Controls | Owner | Residual | Status |
+|---|---|---|---|---|---|---|---|---|
+| R-PLAN-01 | Branch protection and rulesets are not enforced on a private repository on GitHub Free (OPS-14): `ci-gate`, `security-gate`, review rules and "no force push" become advisory; a direct push or an admin merge bypasses every scan | H | M | High | Change repository plan or visibility (CSM-4); evidence of enforcement at M0 close (ruleset output plus a rejected direct push and a blocked red PR); gitleaks in CI replaces push protection; CODEOWNERS | devops-engineer / owner | Low if enforced; Medium if "protection by convention" | open; needs acceptance only if CSM-4 = B |
+| R-PLAN-02 | Host-dependent properties (RLS with the real pooler and provider roles, argon2 memory on the target, SMTP ports, PDF, TLS, provider restore, preview isolation) are first verified at GATE 4, after six milestones; a design flaw found late is expensive and may force the scoping-only fallback | M | H | High | Local S1 through PgBouncer in CI; early S1/S3/S4 on a free EU Postgres with synthetic data (CSM-5); items listed as Gate 4 entry criteria; NOT VERIFIED rule blocks the Gate | cybersecurity-manager / devops-engineer | Medium (without CSM-5 A) | open; needs acceptance only if CSM-5 = B |
+| R-PLAN-03 | Documentation drift: `02-requisiti.md` lacks change requests CR-1..CR-11 of `08-security.md`, counts differ (ABU 111 vs 112), `PASSWORD_PEPPER` missing from config list and secrets inventory, FR-ENF-01 incomplete; tests or controls built to the weaker text | M | M | Medium | Precedence rule (stricter text wins); tasks T1 to T5; meta-test of ABU ids; `.env.example` vs schema test | PM / requirements-analyst | Low | open (tasks planned) |
+| R-PLAN-04 | Password pepper in the environment: leak lowers the cost of offline cracking of a stolen hash dump; loss makes every hash unverifiable (all users need a new link) | L | H | Medium | Same custody and offline copy as the KEK (CSM-2); `_PREVIOUS` rotation path; bulk reissue command (ABU-M1-35); never stored in DB or backup set; rotation runbook and rehearsal (T10) | security-engineer / owner | Low | open |
+| R-PLAN-05 | Incident response is only as good as the product allows: no global maintenance switch, no revoke-all-sessions, no PII-free breach query pack, no `security.txt` in the plan; a single owner without on-call may be unable to contain a SEV1 quickly | M | H | High | `incident-response.md`; tasks T6 to T9 in M1/M6; tabletop exercise and rotation drill before GATE 4; deputy (CSM-2) | cybersecurity-manager / backend-developer | Medium | open |
+
+### 3.9 Planned control coverage per milestone (traceability, 2026-11-03)
+
+"Planned" means written in the plan and tests; no row is `mitigated` until code and CI evidence exist and I have signed the milestone.
+
+| Milestone | Risks addressed (controls and ABU sets) |
+|---|---|
+| M0 (16 ABU) | R-ISO-01/02 (roles, FORCE RLS, grants snapshot, GUC bleed, ABU-M0-01..08); R-SEC-03 (gitleaks, config guards, ABU-M0-09/10); R-SUP-01/02 (SCA, Semgrep, Trivy, zizmor, ABU-M0-16); R-ISO-05 (ABU-M0-12); R-APP-06 (headers, ABU-M0-11); R-APP-07 (log canary, ABU-M0-15); R-ISO-06 (append-only grants, ABU-M0-07); R-PLAN-01/03 |
+| M1 (34 in plan, 35 in security doc) | R-AUTH-01/04/05/06, R-SEC-01/04/05 (ABU-M1-01..35: sessions, lockout, set-password link, pepper, SSRF guard, encryption, jobs); R-ISO-04; R-PLAN-04/05 (T6, T7) |
+| M2 (22) | R-APP-01/03/04/05, R-ISO-01 for public flows (booking abuse, PDF, uploads, email, notes card check ABU-M2-22) |
+| M3 (13) | R-ISO-04, R-PRIV-02 (anonymisation, customer export, audit PII tests), R-ISO-06 |
+| M4 (7) | R-APP-02 (CSV), cross-tenant on finance and snapshots |
+| M5 (7) | R-APP-01 (theme injection), R-APP-06 (CSP with theming, S-FE-3) |
+| M6 (12) | R-PRIV-02/03 (purge, termination, retention), R-HOST-04 (ABU-M6-07, host), R-IR-03; host-dependent cases stay NOT VERIFIED until GATE 4; R-PLAN-05 (T8, T9) |
+
 ## 4. Risks requiring explicit acceptance by the user (summary, via the project manager)
 
 | Risk | When the acceptance is needed | Option affected |
@@ -136,11 +160,17 @@ Nothing is `mitigated` yet: no code exists. "Residual" is the expected level if 
 | R-IR-02 single-person dependency | Before Gate 3 (CSM-2) | all |
 | Any RLS fallback to scoping-only (if spike S1 fails) | During M1 | A, B, C |
 
-Acceptance is not recorded yet. When the user accepts, the PM updates `Status` to `accepted` with date and wording of the decision.
+Acceptance of the rows above is not recorded yet except where the acceptance log below says otherwise. Context after GATE 2 and GATE 3: the code bundle is Option A (hosting deferred), so the Option B and C rows no longer apply unless the hosting decision changes; R-HOST-02 (US-HQ processors) is decided with the hosting choice before GATE 4.
+
+State on 2026-11-03:
+- **Accepted until GATE 4** (log below): no MFA (R-AUTH-02, R-AUTH-03), no SMTP-change controls (R-AUTH-06 control SEC-11), no CAPTCHA switch (R-APP-04 control SEC-10).
+- **Not yet recorded, go to the GATE 4 re-decision pack**: R-AUTH-01, R-SEC-02, R-HOST-02, R-IR-01 (CSM-1), R-IR-02 (CSM-2), and the CSM-3 external review.
+- **New, need an answer now (conditional)**: R-PLAN-01 (CSM-4 = B) and R-PLAN-02 (CSM-5 = B).
+- When the user accepts, the PM updates `Status` to `accepted` with the date and the wording of the decision.
 
 ## 5. Review
 
-Next review: start of Gate 3 (plan), then at the end of every milestone and at Gate 4. New risks from the Phase 4 threat model (`docs/08-security.md`) are added here by the cybersecurity-manager.
+Last review: GATE 3 (2026-11-03). Next: end of M0, then at the end of every milestone and at Gate 4. New risks from the Phase 4 threat model (`docs/08-security.md`) are added here by the cybersecurity-manager.
 
 ## User risk acceptance log (recorded by PM)
 | Date | Risk | Decision | Accepted by | Valid until |
