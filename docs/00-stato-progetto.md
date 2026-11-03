@@ -64,6 +64,7 @@ APPROVAZIONE_GO_LIVE: IN_ATTESA
 | 2026-11-01 | SEO: only /{slug} root indexable (SEO-1); optional tenant short description ≤160 chars (SEO-3) and optional address (SEO-4); title ≤45 chars | User choice | 09-seo.md |
 | 2026-11-01 | Visual direction Clear + 3 borrowings (UI-1) | User choice | docs/design/index.html |
 | 2026-11-01 | Tenant colors: automatic darker shade for links/text, block only pairs with no automatic fix (UI-2; rewords FR-BRD-04/A-29) | User choice | 04b-ui-design.md |
+| 2026-11-03 | Suspended/terminated tenant public pages answer HTTP 200 + noindex (FE-1 = B; overrides SEO 503/410 proposal) | User choice | 07-frontend.md, 09-seo.md |
 | 2026-11-01 | UI: shadcn/ui on Tailwind, Lucide, per-tenant tokens | Spec constraint | spec §10.2 |
 
 ## Approval log

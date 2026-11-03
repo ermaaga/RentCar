@@ -73,7 +73,7 @@ Already answered or decided are not repeated (see `00-stato-progetto.md`). "Pre-
 ### 8.1 Needed before or during implementation
 | ID | Question | Recommendation | Blocking | Agent |
 |---|---|---|---|---|
-| FE-1 | Real 503/410 status for suspended/terminated tenant pages vs 200 + noindex | A: real status via an extra check on public requests (validated in spike S-FE-2) | before M2 | frontend/seo |
+| FE-1 | Real 503/410 status vs 200 + noindex | **ANSWERED 2026-11-03: 200 + noindex** | — | frontend/seo |
 | SEC-15 / ARC-9 | Show the activation link on screen if email fails? | A: never shown; fix SMTP and re-issue | no (applied as default) | security/architect |
 | SEC-12 | Tenant admin reset email via system SMTP | A: system SMTP for admins, tenant SMTP for operators | no | security |
 | SEC-14 | Password pepper (ASVS 2.4.5) | A: yes, half a day | no | security |
