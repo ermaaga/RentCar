@@ -2,6 +2,7 @@
 
 Version 1.0 · 2026-11-01 · Owner: frontend-developer · Phase 4, wave B (last analysis document) · Status: analysis, no code
 Inputs: `docs/03b-struttura-codice.md` (binding), ADR-0001/0012/0014/0015, `docs/04a-ux.md`, `docs/04b-ui-design.md` (direction Clear + 3 borrowings), `docs/design/tokens.json`, `docs/design/clear/*.html`, `docs/06-backend-api.md`, `docs/08-security.md` (SR-HDR, SR-SES, decisions 5.1/5.4), `docs/09-seo.md`, `docs/10-test-plan.md`, `docs/02-requisiti.md` v1.3/1.4, `docs/12-osservabilita.md`.
+Change log v1.1 (2026-11-03, GATE 3 answers): FE-1 = B (suspended/terminated tenants answer HTTP 200 + noindex; no extra middleware check; spike S-FE-2 dropped; R-FE-1 closed); FE-2..FE-9 = A (accepted as recommended); UX-2 A, UX-3 A, UI-3 A, UI-4 A, QA-2 A applied (section 0.1).
 Language rule: this document is in English (user decision 2026-11-01); identifiers, keys, file names and test names are in English. Paths under `src/` are **planned** (greenfield project, 03b TD-1); the first task that creates a pattern places it exactly where indicated.
 
 ---
@@ -21,6 +22,17 @@ Language rule: this document is in English (user decision 2026-11-01); identifie
 | FE-D9 | **The client never reads the clock to show "today" or deadlines**: everything comes from the server as strings/durations (`todayLocal`, `idleExpiresInMs`). | Deterministic tests with the CI clock (section 16.4) |
 | FE-D10 | **No analytics, no RUM, no browser SDK, no cookie banner** in v1. Core Web Vitals measured in the lab (Lighthouse CI + Playwright). | FR-PUB-13, SR-GDPR-02, SR-LOG-08, `12-osservabilita.md` |
 
+### 0.1 GATE 3 decisions applied (2026-11-03)
+| ID | Decision | Effect on this document |
+|---|---|---|
+| FE-1 = B | Suspended/terminated tenants: **HTTP 200 + `noindex, nofollow`** (meta and `X-Robots-Tag`); 404 stays real via `notFound()`. | No Node-runtime middleware status gate, no extra per-request query, spike S-FE-2 removed, **R-FE-1 closed**. Section 1 "Tenant states", 17.2, 17.4, 17.5 updated. Departure from 09-seo section 5 (503/410) is a recorded user decision; the state page keeps the same copy and no canonical. |
+| FE-2..FE-9 = A | JS budgets per page class (13.1); Tailwind v4 (7.1); calendar view preference in `localStorage` (8.1); no browser error reporting in v1 (15); 480/1280 variants, 16:9, empty alt on cards (13.3); 03b clarifications (3, 11); booking draft in memory only (6); `digest` in server logs (15). | Already written as recommended; now final. |
+| UX-2 = A | Search dates are **prefilled** (server-side defaults from tenant rules) and the number of billed days is visible ("N days billed"). | Root form is server-rendered with defaults and the billed-days line for the default period (no JS). Live update when the user edits dates happens on `/vehicles` and `/book` (client islands); on the root it refreshes after submit (A-FE-9). |
+| UX-3 = A | Public pages show the **cover photo only**. | No gallery dialog in v1; `VehicleCard` renders one image; admin `PhotoManager` unchanged (up to 10 photos, cover selectable). |
+| UI-3 = A | **Inter** self-hosted as platform default, variable woff2, latin + latin-ext, weights 400-800. | Section 7.6; Manrope and Plus Jakarta Sans remain the tenant-selectable alternatives (ADR-0012). |
+| UI-4 = A | Placeholder platform logo (`car` icon on primary) for tenants without a logo and for `/system`. | `PublicShell`/`AdminShell` render `PlatformMark` when `logo` is null; alt = tenant title. |
+| QA-2 = A | Stable attribute `data-calendar-grid` on the calendar scroll container. | Already specified in 8.2/16.2; final. |
+
 ---
 
 ## 1. Rendering strategy by route group
@@ -36,9 +48,9 @@ Next.js App Router, Node runtime. All pages read headers/nonce per request: they
 | Tenant admin | `/{slug}/admin/**` | **Dynamic SSR + client islands** (shell, forms, calendar, sheets). No SPA: every page is an RSC calling the service | `X-Robots-Tag: noindex` (central) | Private area, SEO irrelevant, but SSR avoids waterfalls and delivers data already filtered by role |
 | Auth | `/{slug}/admin/login`, `forgot-password`, `reset-password`, `activate`; `/system/login`... | Dynamic SSR, minimal client form; `Referrer-Policy: no-referrer` (central header) | noindex | Token pages: `peekCredentialLink` on GET (read-only), POST by the action (06 X5) |
 | System | `/system/**` | Dynamic SSR + islands, platform theme (no `theme.css`) | noindex | FR-UX-13 |
-| Tenant states | not active | The `[slug]` layout resolves the state **before** any Suspense (so the HTTP status can still be changed). 404 = `notFound()`. **410 and 503 cannot be expressed from an RSC**: see risk R-FE-1 and spike S-FE-2 | `noindex, nofollow` | 09-seo section 5 |
+| Tenant states | suspended, terminated, deleted | The `[slug]` layout resolves the state before any Suspense. Unknown/reserved slug = `notFound()` (real 404). Suspended/terminated/tombstone = a state page with **HTTP 200** and `noindex, nofollow` (decision FE-1 = B; no 503/410) | `noindex, nofollow`, no canonical | 09-seo section 5 (status codes relaxed by user decision) |
 
-Ordering rule (so statuses are honored): the `[slug]` `layout.tsx` does `await resolveTenant()` and decides `notFound()`/state page; **no `loading.tsx` and no `<Suspense>` above or inside the layout before that decision**. `loading.tsx` exists only at page level (child segment) and does not wrap the layout.
+Ordering rule (so the real 404 is honored): the `[slug]` `layout.tsx` does `await resolveTenant()` and decides `notFound()`/state page; **no `loading.tsx` and no `<Suspense>` above or inside the layout before that decision**. `loading.tsx` exists only at page level (child segment) and does not wrap the layout.
 
 ---
 
@@ -354,7 +366,7 @@ Every item is a Definition of Done criterion for a PR touching UI; "T" = automat
 | 17 | Images: vehicle card `alt=""` when the name is adjacent (UX 9.1.18 decision), gallery with meaningful alt, logo with tenant alt, decorative icons `aria-hidden`; see FE-6 for the conflict with SEO SR-15 | axe + M |
 | 18 | 3 px focus ring + 2 px offset (`--ring`) on every focusable, never removed; `scroll-padding-*` equal to sticky heights (2.4.11) | Playwright: focus not covered by bottom nav/FAB/sticky bar |
 | 19 | Calendar: ARIA grid + Agenda (section 8.4) | Playwright keyboard T + M (VoiceOver/NVDA) |
-| 20 | Error/404/503 pages: titles and `h1` present, home link | axe T |
+| 20 | Error/404/tenant-state pages: titles and `h1` present, home link | axe T |
 
 axe (`wcag2a, wcag2aa, wcag21aa, wcag22aa`) on every route class and every wireframe state, in light, dark and with three tenant palettes (10-test-plan 9.1): **zero serious/critical violations** as the gate; best-practice only reported. Manual verification: keyboard on every flow, VoiceOver iOS + NVDA/Firefox (public, calendar, booking edit), 320 zoom.
 
@@ -439,7 +451,7 @@ Rules: components tested with **fakes injected via props** (FE-D6), no `vi.mock`
 Priority to roles/labels (also verifies accessibility). `data-testid` allowed only when there is no natural role, listed in `tests/e2e/pages/selectors.md`. Agreed stable attributes: **`data-calendar-grid`** on the calendar scroll container (value = view; used by `expectNoHorizontalPageScroll({ allow })`), **`data-calendar-ready`**, `data-page-title` on the H1; `data-density` is not needed (CSS). The attributes do not change with theme or language.
 
 ### 16.3 Page objects (`tests/e2e/pages/`, one per page, English methods, no assertions inside page objects except `expectLoaded()`)
-`PublicSearchPage` (`fillDates`, `search`, `contactBlock`), `ResultsPage` (`openFilters`, `applyFilters`, `selectVehicle(name)`, `cards`), `BookingFormPage` (`fillCustomer`, `confirm`, `errorSummary`, `banner`), `ConfirmationPage` (`code`, `downloadPdf`), `TenantStatePage` (503/410/404 copy), `AdminLoginPage`, `SetPasswordPage`, `TodayPage`, `CalendarPage` (`switchView(view)`, `scroller()` = `[data-calendar-grid]`, `cell(vehicle, isoDate)`, `bookingButton(code)`, `pressKey`, `quickView`, `agenda`), `BookingsPage`, `BookingDetailPage` (`recordPayment`, `complete`, `cancel`), `BookingEditPage` (`changesPanel`, `save`, `conflictBanner`), `VehicleFormPage` (`addPhoto(path)`, `photoRow(n)`), `VehiclesPage`, `RevenuePage`, `BrandingPage` (`setColour`, `contrastRow(name)`, `preview(mode)`), `SettingsPage`, `SystemTenantsPage`, `CreateTenantPage`, `AdminNav` (`bottomNav`, `sideNav`, `openMore`). Shared helpers from 10-test-plan 6.3 (`expectNoHorizontalPageScroll`, `expectTouchTargets`, `runAxe`, `expectNoCspViolations`, `withTenantPalette`) and a `focusIsNotObscured(page)` (compares the active element's bounding box with the sticky bars; 2.4.11).
+`PublicSearchPage` (`fillDates`, `search`, `contactBlock`), `ResultsPage` (`openFilters`, `applyFilters`, `selectVehicle(name)`, `cards`), `BookingFormPage` (`fillCustomer`, `confirm`, `errorSummary`, `banner`), `ConfirmationPage` (`code`, `downloadPdf`), `TenantStatePage` (suspended/terminated/404 copy), `AdminLoginPage`, `SetPasswordPage`, `TodayPage`, `CalendarPage` (`switchView(view)`, `scroller()` = `[data-calendar-grid]`, `cell(vehicle, isoDate)`, `bookingButton(code)`, `pressKey`, `quickView`, `agenda`), `BookingsPage`, `BookingDetailPage` (`recordPayment`, `complete`, `cancel`), `BookingEditPage` (`changesPanel`, `save`, `conflictBanner`), `VehicleFormPage` (`addPhoto(path)`, `photoRow(n)`), `VehiclesPage`, `RevenuePage`, `BrandingPage` (`setColour`, `contrastRow(name)`, `preview(mode)`), `SettingsPage`, `SystemTenantsPage`, `CreateTenantPage`, `AdminNav` (`bottomNav`, `sideNav`, `openMore`). Shared helpers from 10-test-plan 6.3 (`expectNoHorizontalPageScroll`, `expectTouchTargets`, `runAxe`, `expectNoCspViolations`, `withTenantPalette`) and a `focusIsNotObscured(page)` (compares the active element's bounding box with the sticky bars; 2.4.11).
 
 ### 16.4 Clock and determinism (QA request)
 - **No clock hook in the frontend.** "Today" and deadlines come from the server (FE-D9): the test server clock (`/api/test/clock`, `APP_ENV=ci` only, backend responsibility) and Playwright's `page.clock.install({ time })` for browser timers (session dialog, `fastForward`) are enough. The test "today highlight with browser in another time zone" (TC-CAL-03) works because the client does not use its own zone.
@@ -455,7 +467,7 @@ AC5 (calendar, natural order, views, today) -> `CalendarPage` + keyboard + Agend
 ### 17.1 Estimate (person-days, one senior frontend developer; includes component tests, E2E of own flows, axe; backend and devops excluded)
 | Milestone | Frontend content | days |
 |---|---|---|
-| M0 | Next/Tailwind v4/shadcn scaffold, `build-tokens`, base `ui/form` + `ui/states` + `ui/layout`, i18n (catalog, `useT`, `check-messages`, lint), `useActionRunner`, Vitest+RTL and Playwright setup (base page objects, helpers, axe, JS budget), shadcn vs CSP audit, spikes S-FE-1/S-FE-2 | 8-10 |
+| M0 | Next/Tailwind v4/shadcn scaffold, `build-tokens`, base `ui/form` + `ui/states` + `ui/layout`, i18n (catalog, `useT`, `check-messages`, lint), `useActionRunner`, Vitest+RTL and Playwright setup (base page objects, helpers, axe, JS budget), shadcn vs CSP audit, spikes S-FE-1/S-FE-3 | 8-10 |
 | M1 | Auth (login, forgot, reset, activate, account, sessions), admin and system shell (responsive nav, banners, `SessionClock`), tenant console (list, creation, detail), tenant states | 12-15 |
 | M2 | Public site (root + SEO/JSON-LD, results + filters, booking form, confirmation, legal, states), admin vehicles (list, detail, form, photos with downscale/upload), `theme.css`/font integration | 16-19 |
 | M3 | Today, calendar (Grid/Week/Month/Day/Agenda, ARIA grid, quick view), bookings (list, detail, new/edit with Changes panel and live availability), customers, operators, activity | 20-25 |
@@ -469,7 +481,7 @@ Parallelism: after M0 the work is almost entirely sequential with the backend of
 ### 17.2 Risks
 | ID | Risk | Severity | Mitigation |
 |---|---|---|---|
-| R-FE-1 | **HTTP 410/503 statuses cannot be produced from a Server Component** (SEO section 5): needs Node middleware or an alternative path; depends on the Next version and on the host (still to be decided) | High | Spike S-FE-2 in M0 (rewrite with `status` from Node-runtime middleware, or a dedicated route handler for non-ok states); fallback 200 + `noindex` documented and accepted by SEO. Question FE-1 |
+| R-FE-1 | ~~HTTP 410/503 cannot be produced from a Server Component~~ **CLOSED 2026-11-03**: FE-1 = B, state pages answer 200 + `noindex`. Residual: search engines may keep closed-tenant pages indexed longer | Low | `noindex` meta + `X-Robots-Tag` on every state page; no canonical |
 | R-FE-2 | The 150 kB gzip root budget is too tight relative to the Next runtime | High | Root without client components, measurement in M0, threshold renegotiable with SEO; verified in CI |
 | R-FE-3 | shadcn/Radix components that emit `style=` in SSR HTML break the strict CSP | Medium | Audit in M0, replacements (`<progress>`), exception only `style-src-attr` as in 08 section 5.1 |
 | R-FE-4 | The "unsaved changes" guard does not cover every navigation (App Router has no route-change events) | Medium | Declared coverage: app links + tab close + back; dedicated test; limit documented |
@@ -488,14 +500,15 @@ Parallelism: after M0 the work is almost entirely sequential with the backend of
 - **A-FE-5** No charts in v1 (UX marks them "Could"); if needed, the table is the text alternative and a light SVG library is to be evaluated.
 - **A-FE-6** Pickup and return date/time with native `input type="date"` + `select` in 15-minute steps (UX "Date picker"; SEO recommends it).
 - **A-FE-7** Server actions can be called from client components passed as props (native Next support); tests use fakes.
+- **A-FE-9** (UX-2) The root shows "N days billed" for the prefilled default period server-side; live recomputation on edit is on `/vehicles` and `/book`.
 - **A-FE-8** The backend provides in DTOs: `todayLocal`, `idleExpiresInMs`, `logo {url,width,height,alt}`, `themeVersion`, `fontKey`, `formToken` with idempotency key, derived values in `previewContrast`.
 
 ### 17.4 Requests to other documents and agents (not edits of their files)
 | To | Request |
 |---|---|
 | solution-architect (03b) | (1) allow `ui -> application/schemas.ts` and `dto.ts` (only these) with a dependency-cruiser rule; (2) i18n catalog split into `messages/en/<namespace>.ts`; (3) `var(--x)` instead of `hsl(var(--x))` (hex tokens) and Tailwind v4 `@theme` instead of "preset"; (4) record the UI references in section 6 (`ui/form/form-shell.tsx`) |
-| backend-developer (06) | DTOs listed in A-FE-8; `previewContrast` returns derived values; `previewBookingChange` outcomes usable as a preview; mechanism for 410/503 statuses (S-FE-2); `RATE_LIMITED.retryAfterSeconds` always present |
-| seo-specialist (09) | Confirm the budget per page class (FE-2); alt text of photos on cards (FE-6); acceptance of the 200+noindex fallback for 503/410 if the spike fails |
+| backend-developer (06) | DTOs listed in A-FE-8; `previewContrast` returns derived values; `previewBookingChange` outcomes usable as a preview; `RATE_LIMITED.retryAfterSeconds` always present; resolver states `gone`/`unavailable` are rendered as 200 + noindex pages (06 4.5 status mapping not applied by the frontend) |
+| seo-specialist (09) | Confirm the budget per page class (FE-2); alt text of photos on cards (FE-6); 09-seo section 5 rows for suspended/terminated/tombstone are overridden by user decision FE-1 = B (200 + noindex); please align that document |
 | security-engineer (08) | Opinion on: localStorage for the view preference (FE-4); booking draft in memory only; `useCssVars` via CSSOM and the Semgrep rule on `style` |
 | observability-engineer (12) | `digest` field in `app.error.unhandled` (FE-9) |
 | qa-engineer (10) | Answer to QA-2: attribute `data-calendar-grid` (+ `data-calendar-ready`); QA-1: no clock hook on the frontend side (section 16.4); page object list of 16.3 |
@@ -503,18 +516,16 @@ Parallelism: after M0 the work is almost entirely sequential with the backend of
 
 ### 17.5 Spikes planned in M0
 - **S-FE-1** Empty App Router + `next build`: root gzip JS weight (runtime target <= ~110 kB) and nonce/CSP verification with `script-src 'strict-dynamic'`.
-- **S-FE-2** HTTP status: try (a) `NextResponse.rewrite(url, { status })` from Node-runtime middleware, (b) a route handler rendering the state, (c) `notFound()` behaviour with/without `loading.tsx`; outcome -> FE-1.
+- ~~S-FE-2~~ dropped (FE-1 = B).
 - **S-FE-3** CSP audit of shadcn components (SSR HTML without `style=`), Tailwind v4 on Safari 16.4.
 
 ---
 
-## 18. Questions (IDs FE-n)
-
-The full question table is in the Esito returned with this document; the IDs are defined here.
+## 18. Questions (IDs FE-n) - all answered at GATE 3 (2026-11-03)
 
 | ID | Topic | Reference |
 |---|---|---|
-| FE-1 | How to obtain real 503/410 on public pages | R-FE-1, S-FE-2 |
+| FE-1 | Real 503/410 on public pages | **B: 200 + noindex** (R-FE-1 closed) |
 | FE-2 | JS budget per page class | 13.1 |
 | FE-3 | Tailwind v4 vs v3 + preset | 7.1 |
 | FE-4 | Calendar view preference in `localStorage` | 3 (rule 7), 8.1 |
