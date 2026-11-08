@@ -1,7 +1,7 @@
 import pino, { type Logger } from "pino";
 
 // Fields that must never reach a log line (03b section 9, SR-LOG-01). Values are replaced, keys kept.
-export const REDACT_PATHS = [
+const REDACT_PATHS = [
   "password",
   "*.password",
   "token",

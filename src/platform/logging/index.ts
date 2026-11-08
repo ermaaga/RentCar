@@ -1,1 +1,1 @@
-export { createLogger, REDACT_PATHS } from "./logger";
+export { createLogger } from "./logger";

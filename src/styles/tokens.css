@@ -1,0 +1,36 @@
+/* Design tokens (docs/04b-ui-design.md; visual direction "Clear"). Colours are defined once here. */
+:root {
+  --background: #ffffff;
+  --foreground: #14171f;
+  --muted-foreground: #4a5160;
+  --primary: #1d4ed8;
+  --primary-foreground: #ffffff;
+  --border: #868c99; /* 3.4:1 on background (WCAG 1.4.11) */
+  --focus: #1d4ed8;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --radius-md: 0.5rem;
+  --target-min: 48px;
+  --focus-ring: 3px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --background: #0f1218;
+    --foreground: #f2f4f8;
+    --muted-foreground: #b4bac7;
+    --primary: #7aa2ff;
+    --primary-foreground: #0f1218;
+    --border: #646b7c; /* 3.5:1 on background (WCAG 1.4.11) */
+    --focus: #7aa2ff;
+  }
+}
+
+:root[data-theme="dark"] {
+  --background: #0f1218;
+  --foreground: #f2f4f8;
+  --muted-foreground: #b4bac7;
+  --primary: #7aa2ff;
+  --primary-foreground: #0f1218;
+  --border: #646b7c; /* 3.5:1 on background (WCAG 1.4.11) */
+  --focus: #7aa2ff;
+}

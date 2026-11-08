@@ -1,6 +1,8 @@
 // @ts-check
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
+import react from "eslint-plugin-react";
+import reactHooks from "eslint-plugin-react-hooks";
 
 export default tseslint.config(
   {
@@ -36,6 +38,17 @@ export default tseslint.config(
       "no-process-env": "error",
       "@typescript-eslint/no-floating-promises": "error",
       "@typescript-eslint/consistent-type-imports": "error",
+    },
+  },
+  {
+    // UI code: no hardcoded user-visible text; every string comes from the message catalog (03b section 13).
+    files: ["**/*.tsx"],
+    plugins: { react, "react-hooks": reactHooks },
+    settings: { react: { version: "detect" } },
+    rules: {
+      "react/jsx-no-literals": ["error", { noStrings: true, ignoreProps: true }],
+      "react-hooks/rules-of-hooks": "error",
+      "react-hooks/exhaustive-deps": "error",
     },
   },
   {

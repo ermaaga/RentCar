@@ -41,6 +41,8 @@
     "dependency-cruiser": "^18.7.2",
     "esbuild": "^0.28.2",
     "eslint": "^10.14.0",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "husky": "^9.1.7",
     "jscpd": "^5.4.3",
     "knip": "^6.44.2",
@@ -51,11 +53,14 @@
     "vitest": "^5.1.0"
   },
   "dependencies": {
+    "@tailwindcss/postcss": "^4.3.5",
     "next": "^16.4.5",
     "pg": "^8.23.1",
     "pino": "^10.4.0",
+    "postcss": "^8.5.32",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "tailwindcss": "^4.3.5",
     "zod": "^4.6.7"
   },
   "type": "module",
