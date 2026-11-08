@@ -4,12 +4,13 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: [".next/**", "out/**", "dist/**", "coverage/**", "node_modules/**"],
+    ignores: [".next/**", "out/**", "dist/**", "coverage/**", "node_modules/**", "next-env.d.ts"],
   },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   ...tseslint.configs.stylisticTypeChecked,
   {
+    files: ["**/*.ts", "**/*.tsx", "**/*.mts"],
     languageOptions: {
       parserOptions: {
         projectService: true,
@@ -26,5 +27,10 @@ export default tseslint.config(
       "@typescript-eslint/no-floating-promises": "error",
       "@typescript-eslint/consistent-type-imports": "error",
     },
+  },
+  {
+    // Plain JavaScript config files: no type information needed.
+    files: ["**/*.mjs", "**/*.js", "**/*.cjs"],
+    extends: [tseslint.configs.disableTypeChecked],
   },
 );
