@@ -1,0 +1,40 @@
+{
+  "name": "protect-main",
+  "target": "branch",
+  "enforcement": "disabled",
+  "conditions": { "ref_name": { "include": ["refs/heads/main"], "exclude": [] } },
+  "bypass_actors": [],
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": true,
+        "require_code_owner_review": true,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": true
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "required_status_checks": [
+          { "context": "lint, types, architecture" },
+          { "context": "commit messages" },
+          { "context": "unit tests with coverage" },
+          { "context": "integration tests (Postgres)" },
+          { "context": "end-to-end (Playwright, desktop and phone widths)" },
+          { "context": "image builds and starts (AC1 skeleton)" },
+          { "context": "secret scan (gitleaks, full history)" },
+          { "context": "dependency audit (pnpm audit, OSV)" },
+          { "context": "static analysis (custom Semgrep rules)" },
+          { "context": "GitHub Actions security (zizmor)" },
+          { "context": "container image (Trivy, SBOM)" }
+        ]
+      }
+    }
+  ]
+}
