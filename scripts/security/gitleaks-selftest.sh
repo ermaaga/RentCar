@@ -11,7 +11,7 @@ title = "selftest: defaults only, no allowlist"
 [extend]
 useDefault = true
 CFG
-printf 'aws_access_key_id = AKIAQ7Q3M5KXR2NBT4WZ\n' >"$WORK/leak.env"
+printf 'aws_access_key_id = %s%s\n' AKIA "Q7Q3M5KXR2NBT4WZ" >"$WORK/leak.env"
 
 echo "gitleaks must detect a fake committed credential"
 if docker run --rm -v "$WORK:/scan" -w /scan "$IMAGE" detect --no-git --source /scan \
