@@ -20,7 +20,9 @@
     "start": "next start",
     "arch": "dependency-cruiser --config .dependency-cruiser.cjs --exclude tests/architecture/fixtures src scripts tests",
     "dup": "jscpd --config .jscpd.json",
-    "dead-code": "knip"
+    "dead-code": "knip",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.2.4",
@@ -44,6 +46,8 @@
   "dependencies": {
     "next": "^16.4.5",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
-  }
+    "react-dom": "^19.3.1",
+    "zod": "^4.6.7"
+  },
+  "type": "module"
 }
