@@ -23,7 +23,7 @@
     "dead-code": "knip",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "build:scripts": "esbuild scripts/migrate.ts --bundle --platform=node --format=esm --target=node22 --external:pg-native --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\" --outfile=dist-scripts/migrate.mjs",
+    "build:scripts": "esbuild scripts/migrate.ts --bundle --platform=node --format=esm --target=node22 --external:pg-native --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\" --outfile=dist-scripts/migrate.mjs && esbuild scripts/seed.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist-scripts/seed.mjs",
     "test:integration": "vitest run tests/integration",
     "test:e2e": "playwright test -c tests/e2e/playwright.config.ts"
   },
@@ -53,6 +53,7 @@
     "vitest": "^5.1.0"
   },
   "dependencies": {
+    "@node-rs/argon2": "^2.2.2",
     "@tailwindcss/postcss": "^4.3.5",
     "next": "^16.4.5",
     "pg": "^8.23.1",

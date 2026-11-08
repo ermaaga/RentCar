@@ -41,6 +41,25 @@ services:
         condition: service_healthy
     restart: "no"
 
+  seed:
+    <<: *app-image
+    profiles: ["seed"]
+    command: ["node", "dist-scripts/seed.mjs"]
+    environment:
+      APP_ENV: local
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  mailpit:
+    image: axllent/mailpit:v1.21.8@sha256:81370195cd4a0eab9604d17c2617a7525b0486f9365555253b6c5376c6350f1a
+    profiles: ["mail"]
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
+    restart: unless-stopped
+
   app:
     <<: *app-image
     environment:
@@ -48,6 +67,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgres://rentcar_app:INSECURE_DEV_app_role@postgres:5432/rentcar}
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-INSECURE_DEV_encryption_key_change_me_32chars}
       CRON_SECRET: ${CRON_SECRET:-INSECURE_DEV_cron_secret_change_me_32chars_min}
+      PASSWORD_PEPPER: ${PASSWORD_PEPPER:-INSECURE_DEV_password_pepper_change_me_32chars}
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:

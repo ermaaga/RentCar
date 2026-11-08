@@ -150,7 +150,9 @@ jobs:
       - name: Start the stack
         run: |
           cp .env.example .env
-          docker compose up -d --build --wait --wait-timeout 240
+          docker compose up -d --build
+      - name: Wait for the app
+        run: curl --fail --silent --retry 40 --retry-delay 5 --retry-all-errors http://127.0.0.1:3000/api/readyz
       - run: pnpm run test:e2e
       - name: Upload report on failure
         if: failure()
@@ -174,9 +176,9 @@ jobs:
       - name: Start the local stack
         run: |
           cp .env.example .env
-          docker compose up -d --build --wait --wait-timeout 240
+          docker compose up -d --build
       - name: Liveness endpoint
-        run: curl --fail --silent http://127.0.0.1:3000/api/healthz
+        run: curl --fail --silent --retry 40 --retry-delay 5 --retry-all-errors http://127.0.0.1:3000/api/healthz
       - name: Stop
         if: always()
         run: docker compose down -v

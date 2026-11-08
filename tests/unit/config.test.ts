@@ -9,6 +9,7 @@ const localEnv = {
   APP_ENV: "local",
   APP_ENCRYPTION_KEY: KEY,
   CRON_SECRET: KEY,
+  PASSWORD_PEPPER: KEY,
 };
 
 /** Variables read only by compose (database bootstrap), not by the application config. */
@@ -17,6 +18,7 @@ const COMPOSE_ONLY = [
   "ROLE_MIGRATOR_PASSWORD",
   "ROLE_APP_PASSWORD",
   "ROLE_BACKUP_PASSWORD",
+  "COMPOSE_PROFILES",
 ];
 
 function envKeysInExample(): string[] {
