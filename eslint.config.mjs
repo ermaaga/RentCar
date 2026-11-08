@@ -12,6 +12,8 @@ export default tseslint.config(
       "coverage/**",
       "node_modules/**",
       "next-env.d.ts",
+      "tests/security/semgrep-fixtures/**",
+      "tests/architecture/fixtures/**",
     ],
   },
   js.configs.recommended,

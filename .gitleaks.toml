@@ -1,0 +1,10 @@
+# gitleaks configuration. Extends the default rules; allowlists only the documented placeholders.
+title = "RentCar gitleaks"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documented placeholders (prefix INSECURE_DEV_), rejected by production guards"
+regexes = ['''INSECURE_DEV_[A-Za-z0-9_]+''']
+paths = ['''tests/security/semgrep-fixtures/''']
