@@ -12,6 +12,7 @@ export const configSchema = z
     APP_BASE_URL: z.url().default("http://localhost:3000"),
     APP_ENCRYPTION_KEY: secret,
     CRON_SECRET: secret,
+    PASSWORD_PEPPER: secret,
     DATABASE_URL: z.url().optional(),
     DIRECT_DATABASE_URL: z.url().optional(),
   })
@@ -27,7 +28,7 @@ export const configSchema = z
         message: "must be https in staging and production",
       });
     }
-    for (const key of ["APP_ENCRYPTION_KEY", "CRON_SECRET"] as const) {
+    for (const key of ["APP_ENCRYPTION_KEY", "CRON_SECRET", "PASSWORD_PEPPER"] as const) {
       if (cfg[key].startsWith(PLACEHOLDER_PREFIX)) {
         ctx.addIssue({
           code: "custom",

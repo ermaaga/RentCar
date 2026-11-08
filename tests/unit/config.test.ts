@@ -9,6 +9,7 @@ const localEnv = {
   APP_ENV: "local",
   APP_ENCRYPTION_KEY: KEY,
   CRON_SECRET: KEY,
+  PASSWORD_PEPPER: KEY,
 };
 
 /** Variables read only by compose (database bootstrap), not by the application config. */

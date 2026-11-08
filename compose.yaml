@@ -48,6 +48,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgres://rentcar_app:INSECURE_DEV_app_role@postgres:5432/rentcar}
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-INSECURE_DEV_encryption_key_change_me_32chars}
       CRON_SECRET: ${CRON_SECRET:-INSECURE_DEV_cron_secret_change_me_32chars_min}
+      PASSWORD_PEPPER: ${PASSWORD_PEPPER:-INSECURE_DEV_password_pepper_change_me_32chars}
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:
