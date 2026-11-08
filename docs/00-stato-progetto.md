@@ -10,10 +10,10 @@ APPROVAZIONE_GO_LIVE: IN_ATTESA
 ## Summary
 - **Traffic light**: 🟢 on track · reason: discovery in progress, full spec received
 - **Original request**: multi-tenant car rental SaaS — full spec in `docs/spec/car-rental-spec.md`
-- **Current phase**: 6 — Implementation (M0 in progress)
+- **Current phase**: 6 — Implementation (M0 closed; M1 in progress)
 - **Next step**: GitHub CI green on PR #1, then owner decides merge and CSM-4 ruleset; CSM-5 spike S1 before M3. Former M0 list (done):  dependency-cruiser/jscpd/knip, Vitest, DB roles + migration runner (replaces migrate stub), ci.yml, security.yml, Playwright, governance, disabled deploy workflows; CSM-5 spike S1 decision needed before M3
-- **Feature in progress**: M0 Foundations (branch feat/m0-foundations)
-- **Activity in progress**: M0 closed locally; PR #1 (draft, feat/m0-foundations) open, waiting for GitHub CI; see docs/test-reports/m0.md section 3 for open evidence
+- **Feature in progress**: M1 Platform, auth, tenants (one PR per slice, squash-merged, branch deleted on merge)
+- **Activity in progress**: M1 — next: tenant_settings, SMTP config, audit_log, platform console, tenant onboarding flow
 - **Decisions expected from the user**: none until requirements questions
 - **Open risks and issues**: see `docs/pm/raid.md`
 
@@ -26,7 +26,7 @@ APPROVAZIONE_GO_LIVE: IN_ATTESA
 | 3 | Architecture — GATE 2 | done (Option A) | 03-architettura.md, 03b-struttura-codice.md, adr/ |
 | 4 | Detailed design | done | 04…12 |
 | 5 | Questions and approval — GATE 3 | done (approved by user 2026-11-08; security sign-off APPROVED WITH RISKS 2026-11-03) | 13-piano-implementazione.md |
-| 6 | Implementation | in progress (M0) | reviews/, test-reports/ |
+| 6 | Implementation | in progress: M0 closed (PR #1); M1 slices merged: tenants, users/sessions, password policy, hashing, login and sessions, lockout, subscriptions, credential tokens, outbox and job runs | reviews/, test-reports/ |
 | 7 | Pre-release verification | to do | reviews/, test-reports/ |
 | 8 | Documentation | to do | README, docs/manual/ |
 | 9 | Go-live — GATE 4 | to do | 14-go-live.md |
