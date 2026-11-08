@@ -4,20 +4,22 @@ import { hashPassword, verifyPassword } from "../../../platform/crypto/password"
 import { generateToken, hashToken } from "../../../platform/crypto/token";
 import { withTenantTx } from "../../../platform/db/tenant-tx";
 import { extendIdle, LAST_SEEN_THROTTLE_MS, newSessionWindow } from "../domain/session-policy";
+import { retryAfterSeconds } from "../domain/throttle-policy";
+import { isThrottled, loginKey, recordFailure } from "./throttle";
 
 export interface LoginInput {
   tenantId: string;
   username: string;
   password: string;
   peppers: readonly string[];
+  hmacKey: Buffer;
   now: Date;
 }
 
-export interface LoggedIn {
-  token: string;
-  userId: string;
-  absoluteExpiresAt: Date;
-}
+export type LoginResult =
+  | { status: "ok"; token: string; userId: string; absoluteExpiresAt: Date }
+  | { status: "invalid" }
+  | { status: "throttled"; retryAfterSeconds: number };
 
 export interface ResolvedSession {
   userId: string;
@@ -39,26 +41,48 @@ async function findActiveUser(client: pg.PoolClient, input: LoginInput) {
   return res.rows[0];
 }
 
-/** Returns a new session token on success, or null for any failure (wrong user, password, or status). */
-export async function login(pool: pg.Pool, input: LoginInput): Promise<LoggedIn | null> {
-  const pepper = input.peppers[0] ?? "";
+async function checkCredentials(pool: pg.Pool, input: LoginInput): Promise<{ id: string } | null> {
   return withTenantTx(pool, input.tenantId, async (client) => {
     const user = await findActiveUser(client, input);
-    const storedHash = user?.password_hash ?? (await getDummyHash(pepper));
+    const storedHash = user?.password_hash ?? (await getDummyHash(input.peppers[0] ?? ""));
     const ok = await verifyPassword(input.password, storedHash, input.peppers);
-    if (!user?.password_hash || !ok) {
-      return null;
-    }
-    const token = generateToken();
-    const window = newSessionWindow(input.now);
+    return user?.password_hash && ok ? { id: user.id } : null;
+  });
+}
+
+async function openSessionRow(
+  pool: pg.Pool,
+  input: LoginInput,
+  userId: string,
+): Promise<LoginResult> {
+  const token = generateToken();
+  const window = newSessionWindow(input.now);
+  await withTenantTx(pool, input.tenantId, async (client) => {
     await client.query(
       `INSERT INTO sessions (id, tenant_id, realm, user_id, token_hash, idle_expires_at, absolute_expires_at)
        VALUES (gen_random_uuid(), $1, 'tenant', $2, $3, $4, $5)`,
-      [input.tenantId, user.id, hashToken(token), window.idleExpiresAt, window.absoluteExpiresAt],
+      [input.tenantId, userId, hashToken(token), window.idleExpiresAt, window.absoluteExpiresAt],
     );
-    await client.query("UPDATE users SET last_login_at = $2 WHERE id = $1", [user.id, input.now]);
-    return { token, userId: user.id, absoluteExpiresAt: window.absoluteExpiresAt };
+    await client.query("UPDATE users SET last_login_at = $2 WHERE id = $1", [userId, input.now]);
   });
+  return { status: "ok", token, userId, absoluteExpiresAt: window.absoluteExpiresAt };
+}
+
+/**
+ * Login with throttling (SR-AUT-05). A throttled attempt is refused before any password check, so
+ * it costs no hashing time. A failed attempt is counted only after the check.
+ */
+export async function login(pool: pg.Pool, input: LoginInput): Promise<LoginResult> {
+  const key = loginKey(input.hmacKey, input.tenantId, input.username);
+  if (await isThrottled(pool, key, input.now)) {
+    return { status: "throttled", retryAfterSeconds: retryAfterSeconds(input.now) };
+  }
+  const user = await checkCredentials(pool, input);
+  if (!user) {
+    await recordFailure(pool, key, input.now);
+    return { status: "invalid" };
+  }
+  return openSessionRow(pool, input, user.id);
 }
 
 /** Resolves a token to an active session, extending the idle window at most once per throttle interval. */
