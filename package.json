@@ -6,8 +6,25 @@
   "license": "UNLICENSED",
   "packageManager": "pnpm@10.33.2",
   "engines": {
-    "node": ">=22 <23",
+    "node": ">=22",
     "pnpm": ">=10"
   },
-  "scripts": {}
+  "scripts": {
+    "prepare": "husky",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^21.2.4",
+    "@commitlint/config-conventional": "^21.2.4",
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.14.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.6.0",
+    "prettier": "^3.9.10",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.1"
+  }
 }
