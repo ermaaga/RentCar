@@ -29,8 +29,17 @@ export default tseslint.config(
     },
   },
   {
-    // Plain JavaScript config files: no type information needed.
+    // Plain JavaScript files (configs, scripts): no type information needed, Node globals allowed.
     files: ["**/*.mjs", "**/*.js", "**/*.cjs"],
     extends: [tseslint.configs.disableTypeChecked],
+    languageOptions: {
+      globals: {
+        console: "readonly",
+        process: "readonly",
+        module: "readonly",
+        require: "readonly",
+        __dirname: "readonly",
+      },
+    },
   },
 );
