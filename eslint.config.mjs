@@ -4,7 +4,15 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: [".next/**", "out/**", "dist/**", "coverage/**", "node_modules/**", "next-env.d.ts"],
+    ignores: [
+      ".next/**",
+      "out/**",
+      "dist/**",
+      "dist-scripts/**",
+      "coverage/**",
+      "node_modules/**",
+      "next-env.d.ts",
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
@@ -27,6 +35,11 @@ export default tseslint.config(
       "@typescript-eslint/no-floating-promises": "error",
       "@typescript-eslint/consistent-type-imports": "error",
     },
+  },
+  {
+    // Scripts and tests may read the environment; application code may not (03b section 3, rule 2).
+    files: ["scripts/**", "tests/**"],
+    rules: { "no-process-env": "off" },
   },
   {
     // Plain JavaScript files (configs, scripts): no type information needed, Node globals allowed.

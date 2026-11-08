@@ -11,6 +11,14 @@ const localEnv = {
   CRON_SECRET: KEY,
 };
 
+/** Variables read only by compose (database bootstrap), not by the application config. */
+const COMPOSE_ONLY = [
+  "POSTGRES_ADMIN_PASSWORD",
+  "ROLE_MIGRATOR_PASSWORD",
+  "ROLE_APP_PASSWORD",
+  "ROLE_BACKUP_PASSWORD",
+];
+
 function envKeysInExample(): string[] {
   const text = readFileSync(resolve(__dirname, "../../.env.example"), "utf8");
   return text
@@ -18,7 +26,7 @@ function envKeysInExample(): string[] {
     .map((line) => line.trim())
     .filter((line) => line !== "" && !line.startsWith("#"))
     .map((line) => line.split("=")[0] ?? "")
-    .filter((key) => key !== "POSTGRES_ADMIN_PASSWORD"); // compose-only bootstrap variable
+    .filter((key) => !COMPOSE_ONLY.includes(key));
 }
 
 describe("loadConfig", () => {

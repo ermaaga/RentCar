@@ -6,3 +6,4 @@ coverage
 pnpm-lock.yaml
 docs
 *.md
+dist-scripts

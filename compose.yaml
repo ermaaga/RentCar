@@ -1,4 +1,4 @@
-# Local stack: docker compose up  (copy .env.example to .env first, or rely on the defaults below)
+# Local stack: docker compose up  (copy .env.example to .env first)
 name: rentcar
 
 x-app-image: &app-image
@@ -14,10 +14,15 @@ services:
       POSTGRES_USER: rentcar_admin
       POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:-INSECURE_DEV_postgres_admin}
       POSTGRES_DB: rentcar
+      ROLE_MIGRATOR_PASSWORD: ${ROLE_MIGRATOR_PASSWORD:-INSECURE_DEV_migrator_role}
+      ROLE_APP_PASSWORD: ${ROLE_APP_PASSWORD:-INSECURE_DEV_app_role}
+      ROLE_BACKUP_PASSWORD: ${ROLE_BACKUP_PASSWORD:-INSECURE_DEV_backup_role}
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./db/10-roles.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
+      - ./db/bootstrap.sql:/rentcar/bootstrap.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U rentcar_admin -d rentcar"]
       interval: 5s
@@ -28,7 +33,9 @@ services:
 
   migrate:
     <<: *app-image
-    command: ["node", "scripts/migrate.mjs"]
+    command: ["node", "dist-scripts/migrate.mjs"]
+    environment:
+      DIRECT_DATABASE_URL: ${DIRECT_DATABASE_URL:-postgres://rentcar_migrator:INSECURE_DEV_migrator_role@postgres:5432/rentcar}
     depends_on:
       postgres:
         condition: service_healthy
@@ -38,6 +45,7 @@ services:
     <<: *app-image
     environment:
       APP_ENV: local
+      DATABASE_URL: ${DATABASE_URL:-postgres://rentcar_app:INSECURE_DEV_app_role@postgres:5432/rentcar}
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:

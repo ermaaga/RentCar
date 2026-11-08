@@ -12,6 +12,8 @@ export const configSchema = z
     APP_BASE_URL: z.url().default("http://localhost:3000"),
     APP_ENCRYPTION_KEY: secret,
     CRON_SECRET: secret,
+    DATABASE_URL: z.url().optional(),
+    DIRECT_DATABASE_URL: z.url().optional(),
   })
   .superRefine((cfg, ctx) => {
     const productionLike = cfg.APP_ENV === "staging" || cfg.APP_ENV === "production";
