@@ -11,9 +11,9 @@ APPROVAZIONE_GO_LIVE: IN_ATTESA
 - **Traffic light**: 🟢 on track · reason: discovery in progress, full spec received
 - **Original request**: multi-tenant car rental SaaS — full spec in `docs/spec/car-rental-spec.md`
 - **Current phase**: 6 — Implementation (M0 in progress)
-- **Next step**: M0 commits 1–10 (docs/11-devops-deploy.md §12); CSM-5 spike S1 decision needed before M3
+- **Next step**: M0 remaining: dependency-cruiser/jscpd/knip, Vitest, DB roles + migration runner (replaces migrate stub), ci.yml, security.yml, Playwright, governance, disabled deploy workflows; CSM-5 spike S1 decision needed before M3
 - **Feature in progress**: M0 Foundations (branch feat/m0-foundations)
-- **Activity in progress**: M0 implementation
+- **Activity in progress**: M0 implementation — done: skeleton, quality tooling, Next.js app + healthz, Dockerfile + compose (AC1 skeleton verified locally); branch feat/m0-foundations, not pushed
 - **Decisions expected from the user**: none until requirements questions
 - **Open risks and issues**: see `docs/pm/raid.md`
 
