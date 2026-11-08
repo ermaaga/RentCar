@@ -1,0 +1,17 @@
+# gitleaks configuration. Extends the default rules; allowlists only the documented placeholders.
+title = "RentCar gitleaks"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Documented placeholders (prefix INSECURE_DEV_), rejected by production guards"
+regexes = ['''INSECURE_DEV_[A-Za-z0-9_]+''']
+paths = ['''tests/security/semgrep-fixtures/''']
+
+# Historical commit 6c3a845 contained the fake AWS key of the self-test as a literal. The literal was
+# split at run time in the next commit. The key is fake (generated for ABU-M0-10), so the commit is
+# allowlisted by hash instead of rewriting shared history.
+[[allowlists]]
+description = "Fake AWS key in the scanner self-test, historical commit 3b3d53a (ABU-M0-10)"
+commits = ["3b3d53a129ff325ccf884290709f36cce888e8a4"]

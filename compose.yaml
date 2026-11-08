@@ -1,0 +1,71 @@
+# Local stack: docker compose up  (copy .env.example to .env first)
+name: rentcar
+
+x-app-image: &app-image
+  build:
+    context: .
+    target: runner
+  image: rentcar-app:local
+
+services:
+  postgres:
+    image: postgres:16@sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657
+    environment:
+      POSTGRES_USER: rentcar_admin
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:-INSECURE_DEV_postgres_admin}
+      POSTGRES_DB: rentcar
+      ROLE_MIGRATOR_PASSWORD: ${ROLE_MIGRATOR_PASSWORD:-INSECURE_DEV_migrator_role}
+      ROLE_APP_PASSWORD: ${ROLE_APP_PASSWORD:-INSECURE_DEV_app_role}
+      ROLE_BACKUP_PASSWORD: ${ROLE_BACKUP_PASSWORD:-INSECURE_DEV_backup_role}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/10-roles.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
+      - ./db/bootstrap.sql:/rentcar/bootstrap.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rentcar_admin -d rentcar"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  migrate:
+    <<: *app-image
+    command: ["node", "dist-scripts/migrate.mjs"]
+    environment:
+      DIRECT_DATABASE_URL: ${DIRECT_DATABASE_URL:-postgres://rentcar_migrator:INSECURE_DEV_migrator_role@postgres:5432/rentcar}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    <<: *app-image
+    environment:
+      APP_ENV: local
+      DATABASE_URL: ${DATABASE_URL:-postgres://rentcar_app:INSECURE_DEV_app_role@postgres:5432/rentcar}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-INSECURE_DEV_encryption_key_change_me_32chars}
+      CRON_SECRET: ${CRON_SECRET:-INSECURE_DEV_cron_secret_change_me_32chars_min}
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  pgdata:

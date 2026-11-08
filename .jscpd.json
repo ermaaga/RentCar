@@ -1,0 +1,11 @@
+{
+  "threshold": 3,
+  "minTokens": 60,
+  "minLines": 6,
+  "path": ["src"],
+  "ignore": ["**/*.test.*", "**/*.spec.*", "**/__tests__/**", "**/tokens.css"],
+  "reporters": ["console"],
+  "absolute": false,
+  "gitignore": true,
+  "ignoreComments": true
+}

@@ -1,0 +1,650 @@
+openapi: 3.0.3
+info:
+  title: RentCar public HTTP route handlers
+  version: 1.0.0
+  description: |
+    Scope: ONLY the route handlers listed in docs/06-backend-api.md section 7.1 (cron, health, robots, theme CSS,
+    media, PDF, CSV/data exports, uploads, termination export download). Server actions (all form mutations of the UI,
+    including login and the public booking submit) are NOT part of this contract; they are described in
+    docs/06-backend-api.md section 6 and 7.2.
+
+    Conventions
+    - Errors: RFC 9457 `application/problem+json` with stable `code`, `messageKey`, optional `params`, and `requestId`
+      (also in the `X-Request-Id` response header). Never a stack trace, SQL or internal path.
+    - No CORS: no `Access-Control-*` header is ever sent; `OPTIONS` returns 405. All non-GET routes enforce a same-origin
+      check (`Origin`, else `Sec-Fetch-Site: same-origin`). Exports are POST on purpose (no state change on GET).
+    - Cookies: `__Host-rc_tenant` (SameSite=Lax) for `/{slug}/admin/**`, `__Host-rc_system` (SameSite=Strict) for `/system/**`.
+    - Header classes (docs/08-security.md 7.1): F = file download (`Cache-Control: private, no-store`, `Content-Disposition: attachment`,
+      `X-Content-Type-Options: nosniff`, `X-Robots-Tag: noindex, nofollow`, `Referrer-Policy: no-referrer`), M = media, T = theme CSS, J = JSON.
+    - Money is never present in these routes except inside files; amounts in CSV are decimal with a dot.
+servers:
+  - url: https://{host}
+    variables:
+      host:
+        default: example.invalid
+        description: APP_BASE_URL host (local development uses http://localhost:3000)
+tags:
+  - name: platform
+  - name: public
+  - name: admin
+  - name: system
+security: []
+paths:
+  /api/healthz:
+    get:
+      tags: [platform]
+      operationId: getLiveness
+      summary: Liveness probe (process only, no dependency check)
+      responses:
+        '200':
+          description: Process is up
+          headers: { X-Request-Id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Status' }
+              example: { status: ok }
+  /api/readyz:
+    get:
+      tags: [platform]
+      operationId: getReadiness
+      summary: Readiness probe (database reachable within 1 s, migrations applied)
+      description: Bare status only; no versions, hosts or tenant data. Excluded from access logs.
+      responses:
+        '200':
+          description: Ready
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Status' }
+              example: { status: ready }
+        '503':
+          description: Not ready (bare body)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Status' }
+              example: { status: unavailable }
+  /api/jobs/run:
+    get:
+      tags: [platform]
+      operationId: runJobsGet
+      summary: Run due jobs (Vercel Cron style)
+      description: |
+        Requires `Authorization: Bearer <CRON_SECRET>` (constant-time comparison). The secret is never accepted in
+        a query string or cookie; `x-vercel-cron` is not proof of origin. Idempotent per (job, tenant, period).
+        Returns counts and error codes only. If `CRON_SECRET` is unset the route answers 503 and production boot fails.
+      security: [ { cronBearer: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/JobRunResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/Problem503' }
+    post:
+      tags: [platform]
+      operationId: runJobsPost
+      summary: Run due jobs (any scheduler), optionally a subset
+      security: [ { cronBearer: [] } ]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/JobRunRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/JobRunResult' }
+        '400': { $ref: '#/components/responses/ProblemValidation' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '415': { $ref: '#/components/responses/ProblemUnsupportedMedia' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/Problem503' }
+  /robots.txt:
+    get:
+      tags: [public]
+      operationId: getRobots
+      summary: robots.txt (content depends on PUBLIC_INDEXING_ENABLED, owned by docs/09-seo.md)
+      responses:
+        '200':
+          description: Plain text
+          content:
+            text/plain:
+              schema: { type: string }
+              examples:
+                disabled: { value: "User-agent: *\nDisallow: /\n" }
+                enabled: { value: "User-agent: *\nAllow: /\nDisallow: /api/\n" }
+  /{slug}/theme.css:
+    get:
+      tags: [public]
+      operationId: getTenantThemeCss
+      summary: Per-tenant CSS variables (validated hex values only)
+      description: |
+        Header class T. The `v` query is the tenant `themeVersion` (cache buster); the response is immutable for a given
+        version. Unknown, suspended, terminated or deleted tenants answer 404 (no data). Values re-validated at render;
+        an invalid stored colour falls back to the platform default token.
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - name: v
+          in: query
+          required: true
+          schema: { type: integer, minimum: 1, maximum: 2147483647 }
+      responses:
+        '200':
+          description: CSS
+          headers:
+            Cache-Control: { schema: { type: string, example: 'public, max-age=31536000, immutable' } }
+          content:
+            text/css:
+              schema: { type: string }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /media/tenants/{tenantId}/vehicles/{vehicleId}/{file}:
+    get:
+      tags: [public]
+      operationId: getVehiclePhoto
+      summary: Public vehicle photo variant
+      description: |
+        Header class M (`Cache-Control: public, max-age=31536000, immutable`, `Content-Security-Policy: default-src 'none'; sandbox`,
+        `nosniff`). The key is rebuilt from the captured groups after one decode pass; anything else is 404. Private artefacts
+        (`private/{tenantId}/...`) are never served here.
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/VehicleId'
+        - $ref: '#/components/parameters/MediaFile'
+      responses:
+        '200': { $ref: '#/components/responses/MediaOk' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /media/tenants/{tenantId}/branding/{file}:
+    get:
+      tags: [public]
+      operationId: getBrandingAsset
+      summary: Public logo / Open Graph image
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/MediaFile'
+      responses:
+        '200': { $ref: '#/components/responses/MediaOk' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /{slug}/booking/{code}/pdf:
+    get:
+      tags: [public]
+      operationId: downloadConfirmationPdf
+      summary: "Booking confirmation PDF (capability, tenant slug AND booking code)"
+      description: |
+        Use case BKG-05. Regenerated from stored data on every request (never stored). Any miss (wrong code, code of another tenant,
+        suspended tenant) returns an identical 404 body and headers; misses are rate limited (10/h per tenant+IP).
+        Header class F, filename `booking-{code}.pdf`. The PDF contains no phone or email.
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - $ref: '#/components/parameters/BookingCode'
+      responses:
+        '200': { $ref: '#/components/responses/PdfOk' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/Problem503' }
+  /{slug}/admin/bookings/{code}/pdf:
+    get:
+      tags: [admin]
+      operationId: downloadBookingPdfStaff
+      summary: Booking PDF for staff (operator or admin)
+      security: [ { tenantSession: [] } ]
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - $ref: '#/components/parameters/BookingCode'
+      responses:
+        '200': { $ref: '#/components/responses/PdfOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Problem503' }
+  /{slug}/admin/exports/bookings:
+    post:
+      tags: [admin]
+      operationId: exportBookingsCsv
+      summary: Stream the bookings CSV (admin only; allowed in read-only mode)
+      description: |
+        POST (not GET) because an audit row `export.created` is written before the first byte. Form fields are the filters of the
+        bookings list. At most 50,000 rows (otherwise 422 `EXPORT_ROW_CAP_EXCEEDED`), one export per tenant at a time (409
+        `EXPORT_IN_PROGRESS`), 10 per hour per tenant. Cells starting with `= + - @`, TAB, CR or full-width look-alikes are
+        prefixed with an apostrophe. UTF-8 with BOM, RFC 4180.
+      security: [ { tenantSession: [] } ]
+      parameters: [ { $ref: '#/components/parameters/Slug' } ]
+      requestBody:
+        required: false
+        content:
+          application/x-www-form-urlencoded:
+            schema: { $ref: '#/components/schemas/BookingExportFilters' }
+      responses:
+        '200': { $ref: '#/components/responses/CsvOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/ProblemConflict' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /{slug}/admin/exports/customers:
+    post:
+      tags: [admin]
+      operationId: exportCustomersCsv
+      summary: Stream the customers CSV (anonymised customers exported as placeholders)
+      security: [ { tenantSession: [] } ]
+      parameters: [ { $ref: '#/components/parameters/Slug' } ]
+      requestBody:
+        required: false
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                q: { type: string, maxLength: 64 }
+      responses:
+        '200': { $ref: '#/components/responses/CsvOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/ProblemConflict' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /{slug}/admin/exports/customers/{customerId}:
+    post:
+      tags: [admin]
+      operationId: exportCustomerData
+      summary: One customer's data (GDPR access/portability), CSV or JSON; not stored, audited
+      security: [ { tenantSession: [] } ]
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - name: customerId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [format]
+              additionalProperties: false
+              properties:
+                format: { type: string, enum: [csv, json] }
+      responses:
+        '200':
+          description: File attachment (header class F)
+          content:
+            text/csv: { schema: { type: string } }
+            application/json: { schema: { type: object } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /{slug}/admin/exports/revenue:
+    post:
+      tags: [admin]
+      operationId: exportRevenueCsv
+      summary: Stream the revenue table CSV
+      security: [ { tenantSession: [] } ]
+      parameters: [ { $ref: '#/components/parameters/Slug' } ]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [year, grain]
+              additionalProperties: false
+              properties:
+                year: { type: integer, minimum: 2000, maximum: 2100 }
+                vehicleId: { type: string, format: uuid }
+                grain: { type: string, enum: [month, vehicle] }
+      responses:
+        '200': { $ref: '#/components/responses/CsvOk' }
+        '400': { $ref: '#/components/responses/ProblemValidation' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/ProblemConflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /{slug}/admin/vehicles/{vehicleId}/photos:
+    post:
+      tags: [admin]
+      operationId: uploadVehiclePhoto
+      summary: Upload one vehicle photo (raw image bytes)
+      description: |
+        Body is the image itself (the browser has already downscaled it). Declared Content-Type and file name are ignored; the type is
+        detected from magic bytes (JPEG, PNG, WebP only). Limit `UPLOAD_MAX_BYTES` (default 4,194,304) enforced before and while reading.
+        Decoded with a pixel cap, re-encoded to 480/1280 px WebP, metadata stripped. At most 10 photos per vehicle. 30 uploads/hour/user.
+        Not allowed when the tenant is read-only.
+      security: [ { tenantSession: [] } ]
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - $ref: '#/components/parameters/VehicleId'
+      requestBody:
+        required: true
+        content:
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/png: { schema: { type: string, format: binary } }
+          image/webp: { schema: { type: string, format: binary } }
+          application/octet-stream: { schema: { type: string, format: binary } }
+      responses:
+        '201':
+          description: Photo registered
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Photo' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/ProblemConflict' }
+        '413': { $ref: '#/components/responses/ProblemTooLarge' }
+        '415': { $ref: '#/components/responses/ProblemUnsupportedMedia' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /{slug}/admin/settings/logo:
+    post:
+      tags: [admin]
+      operationId: uploadLogo
+      summary: Upload the tenant logo (raw image bytes, at most 1 MiB)
+      description: |
+        Same pipeline as photos with a 1,048,576 byte cap. Produces PNG (PDF, Open Graph) and WebP variants and regenerates the
+        Open Graph image. `alt` is required when no logo exists yet (1..125 characters).
+      security: [ { tenantSession: [] } ]
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - name: alt
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 125 }
+      requestBody:
+        required: true
+        content:
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/png: { schema: { type: string, format: binary } }
+          image/webp: { schema: { type: string, format: binary } }
+          application/octet-stream: { schema: { type: string, format: binary } }
+      responses:
+        '201':
+          description: Logo stored
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [logoUrl, themeVersion]
+                properties:
+                  logoUrl: { type: string }
+                  themeVersion: { type: integer }
+        '400': { $ref: '#/components/responses/ProblemValidation' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/ProblemTooLarge' }
+        '415': { $ref: '#/components/responses/ProblemUnsupportedMedia' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /system/tenants/{tenantSlug}/logo:
+    post:
+      tags: [system]
+      operationId: uploadTenantLogoSystem
+      summary: System entry point of the logo upload (FR-SYS-03)
+      description: Same contract as `/{slug}/admin/settings/logo`; authenticated with the systemadmin cookie; uses system-scope repositories only.
+      security: [ { systemSession: [] } ]
+      parameters:
+        - name: tenantSlug
+          in: path
+          required: true
+          schema: { type: string }
+        - name: alt
+          in: query
+          schema: { type: string, minLength: 1, maxLength: 125 }
+      requestBody:
+        required: true
+        content:
+          image/png: { schema: { type: string, format: binary } }
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/webp: { schema: { type: string, format: binary } }
+          application/octet-stream: { schema: { type: string, format: binary } }
+      responses:
+        '201':
+          description: Logo stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  logoUrl: { type: string }
+                  themeVersion: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/ProblemTooLarge' }
+        '415': { $ref: '#/components/responses/ProblemUnsupportedMedia' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+  /exports/{token}/download:
+    post:
+      tags: [public]
+      operationId: downloadTerminationExport
+      summary: Download the tenant termination export (one-time link, 7 days, 3 downloads)
+      description: |
+        The page at `GET /exports/{token}` only renders a confirmation button (it never counts); this POST streams the zip and increments the
+        counter (token stored hashed; pending database request X8). The token is the credential: unknown, expired or exhausted tokens all answer
+        the same 404. Header class F; audit row written before the first byte.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string, minLength: 43, maxLength: 43, pattern: '^[A-Za-z0-9_-]{43}$' }
+      responses:
+        '200':
+          description: Zip attachment
+          content:
+            application/zip: { schema: { type: string, format: binary } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+components:
+  securitySchemes:
+    cronBearer:
+      type: http
+      scheme: bearer
+      description: Value of CRON_SECRET (>= 32 random bytes)
+    tenantSession:
+      type: apiKey
+      in: cookie
+      name: __Host-rc_tenant
+      description: Opaque server-side session (HttpOnly, SameSite=Lax); role operator or admin as stated per route
+    systemSession:
+      type: apiKey
+      in: cookie
+      name: __Host-rc_system
+      description: Opaque server-side session (HttpOnly, SameSite=Strict); role systemadmin
+  headers:
+    RequestId:
+      description: Correlation id also present in error bodies
+      schema: { type: string }
+  parameters:
+    Slug:
+      name: slug
+      in: path
+      required: true
+      description: Tenant slug (3..40 chars, lowercase letters, digits, hyphens; reserved words rejected)
+      schema: { type: string, pattern: '^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])$' }
+    TenantId:
+      name: tenantId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    VehicleId:
+      name: vehicleId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    BookingCode:
+      name: code
+      in: path
+      required: true
+      description: 10 characters, Crockford base32 (input is normalised; display form `K7M2-9QXA`)
+      schema: { type: string, pattern: '^[0-9A-HJKMNP-TV-Z]{10}$' }
+    MediaFile:
+      name: file
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[0-9a-f-]{36}(-(480|1280))?\.(webp|png)$' }
+  schemas:
+    Status:
+      type: object
+      required: [status]
+      additionalProperties: false
+      properties:
+        status: { type: string, enum: [ok, ready, unavailable] }
+    JobName:
+      type: string
+      enum:
+        - booking_status_advance
+        - email_outbox_dispatch
+        - subscription_renewal_reminder
+        - subscription_expiry_notice
+        - yearly_snapshot_create
+        - snapshot_reconcile
+        - privacy_reminder
+        - termination_export
+        - termination_deletion_reminder
+        - retention_hourly
+        - retention_daily
+        - storage_orphan_cleanup
+    JobRunRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        jobs:
+          type: array
+          maxItems: 12
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/JobName' }
+        tenantSlug: { type: string }
+    JobRunResult:
+      type: object
+      required: [runId, jobs]
+      additionalProperties: false
+      properties:
+        runId: { type: string }
+        budgetExhausted: { type: boolean }
+        jobs:
+          type: array
+          items:
+            type: object
+            required: [job, processed, changed, skipped, failed]
+            properties:
+              job: { $ref: '#/components/schemas/JobName' }
+              processed: { type: integer }
+              changed: { type: integer }
+              skipped: { type: integer }
+              failed: { type: integer }
+              errorCodes:
+                type: array
+                items: { type: string }
+    BookingExportFilters:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          type: array
+          items: { type: string, enum: [confirmed, active, completed, cancelled] }
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        vehicleId: { type: string, format: uuid }
+        q: { type: string, maxLength: 64 }
+        sort: { type: string, enum: [start, end, created, total] }
+        dir: { type: string, enum: [asc, desc] }
+    Photo:
+      type: object
+      required: [id, position, isCover, url480, url1280, width, height]
+      properties:
+        id: { type: string, format: uuid }
+        position: { type: integer, minimum: 0, maximum: 9 }
+        isCover: { type: boolean }
+        url480: { type: string }
+        url1280: { type: string }
+        width: { type: integer }
+        height: { type: integer }
+    Problem:
+      type: object
+      description: RFC 9457 problem details with project extensions
+      required: [type, title, status, code, messageKey, requestId]
+      properties:
+        type: { type: string, example: 'about:blank' }
+        title: { type: string, description: "Resolved catalog text (English today)" }
+        status: { type: integer }
+        code: { type: string, description: "Stable error code, see docs/06-backend-api.md section 12", example: VALIDATION_FAILED }
+        messageKey: { type: string, example: errors.validation.failed }
+        params: { type: object, additionalProperties: true }
+        retryAfterSeconds: { type: integer }
+        requestId: { type: string }
+        errors:
+          type: array
+          items:
+            type: object
+            required: [field, code, messageKey]
+            properties:
+              field: { type: string }
+              code: { type: string }
+              messageKey: { type: string }
+              params: { type: object, additionalProperties: true }
+  responses:
+    JobRunResult:
+      description: Counts and error codes only
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/JobRunResult' }
+    Unauthorized:
+      description: Missing or invalid credentials (no detail)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Forbidden:
+      description: Role insufficient, origin rejected, or tenant read-only for a write operation
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    NotFound:
+      description: Unknown, foreign or unavailable resource (identical body for all)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    RateLimited:
+      description: Limit exceeded
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ProblemValidation:
+      description: Invalid input (unknown keys, wrong types, out-of-range values)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ProblemConflict:
+      description: State conflict (for example another export running, photo limit)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ProblemTooLarge:
+      description: Body above the limit (detected from Content-Length or while streaming)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ProblemUnsupportedMedia:
+      description: Not JPEG/PNG/WebP by magic bytes, or wrong Content-Type for a JSON route
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ProblemUnprocessable:
+      description: Image cannot be decoded within limits, or export row cap exceeded
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Problem503:
+      description: Service or tenant unavailable (route disabled when CRON_SECRET is unset, tenant suspended, dependency down)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    MediaOk:
+      description: Image (header class M)
+      content:
+        image/webp: { schema: { type: string, format: binary } }
+        image/png: { schema: { type: string, format: binary } }
+    PdfOk:
+      description: PDF attachment (header class F), filename booking-{code}.pdf
+      content:
+        application/pdf: { schema: { type: string, format: binary } }
+    CsvOk:
+      description: CSV attachment (header class F), UTF-8 with BOM, streamed
+      content:
+        text/csv: { schema: { type: string } }

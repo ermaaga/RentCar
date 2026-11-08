@@ -1,0 +1,27 @@
+# Custom Semgrep rules (docs/03b-struttura-codice.md section 3, rules 6 and 7; 08-security static checks).
+rules:
+  - id: rentcar-raw-sql-interpolated
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: SQL built with string interpolation. Use parameterised queries ($1, $2) only.
+    pattern-regex: '\.query\(\s*`[^`]*\$\{'
+
+  - id: rentcar-dangerously-set-inner-html
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: dangerouslySetInnerHTML is banned (XSS). Render text as children instead.
+    pattern-regex: "dangerouslySetInnerHTML"
+
+  - id: rentcar-eval-or-function-constructor
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: eval and the Function constructor are banned.
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+
+  - id: rentcar-fetch-non-constant-url
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: fetch with a non-literal URL risks SSRF. Use a constant base URL and validate the rest.
+    pattern-regex: '\bfetch\(\s*[A-Za-z_$][\w$.]*\s*[,)]'

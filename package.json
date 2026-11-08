@@ -1,0 +1,72 @@
+{
+  "name": "rentcar",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Multi-tenant car rental SaaS",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@10.33.2",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=10"
+  },
+  "scripts": {
+    "prepare": "husky",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "arch": "dependency-cruiser --config .dependency-cruiser.cjs --exclude tests/architecture/fixtures src scripts tests",
+    "dup": "jscpd --config .jscpd.json",
+    "dead-code": "knip",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "build:scripts": "esbuild scripts/migrate.ts --bundle --platform=node --format=esm --target=node22 --external:pg-native --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\" --outfile=dist-scripts/migrate.mjs",
+    "test:integration": "vitest run tests/integration",
+    "test:e2e": "playwright test -c tests/e2e/playwright.config.ts"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@commitlint/cli": "^21.2.4",
+    "@commitlint/config-conventional": "^21.2.4",
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.65.0",
+    "@types/node": "^22.20.5",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitest/coverage-v8": "^5.1.0",
+    "dependency-cruiser": "^18.7.2",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.14.0",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "husky": "^9.1.7",
+    "jscpd": "^5.4.3",
+    "knip": "^6.44.2",
+    "lint-staged": "^17.6.0",
+    "prettier": "^3.9.10",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^5.1.0"
+  },
+  "dependencies": {
+    "@tailwindcss/postcss": "^4.3.5",
+    "next": "^16.4.5",
+    "pg": "^8.23.1",
+    "pino": "^10.4.0",
+    "postcss": "^8.5.32",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwindcss": "^4.3.5",
+    "zod": "^4.6.7"
+  },
+  "type": "module",
+  "pnpm": {
+    "overrides": {
+      "minimatch": ">=11.0.1"
+    }
+  }
+}

@@ -1,0 +1,14 @@
+# Security-sensitive paths require owner review (docs/11-devops-deploy.md 3).
+# Single owner for now (OPS-9); revisit when a second member joins.
+*                                  @ermaaga
+.github/                           @ermaaga
+Dockerfile                         @ermaaga
+compose*.yaml                      @ermaaga
+drizzle/                           @ermaaga
+db/                                @ermaaga
+src/platform/config/               @ermaaga
+src/platform/db/                   @ermaaga
+src/platform/crypto/               @ermaaga
+tests/security/                    @ermaaga
+docs/security/                     @ermaaga
+scripts/security/                  @ermaaga

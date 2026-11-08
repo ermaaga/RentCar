@@ -1,0 +1,182 @@
+# Blocking CI on every push and pull request (docs/11-devops-deploy.md 4.2).
+# Actions are pinned by commit SHA; the lockfile is frozen; default token is read-only.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "10.33.2"
+
+jobs:
+  lint-types-arch:
+    name: lint, types, architecture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run format:check
+      - run: pnpm run lint
+      - run: pnpm run typecheck
+      - run: pnpm run arch
+      - run: pnpm run dup
+      - run: pnpm run dead-code
+
+  commitlint:
+    name: commit messages
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm exec commitlint --from "${{ github.event.pull_request.base.sha }}" --to "${{ github.event.pull_request.head.sha }}" --verbose
+
+  unit:
+    name: unit tests with coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run test:coverage
+
+  integration:
+    name: integration tests (Postgres)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16@sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657
+        env:
+          POSTGRES_USER: rentcar_admin
+          POSTGRES_PASSWORD: INSECURE_DEV_ci_postgres_admin
+          POSTGRES_DB: rentcar
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rentcar_admin -d rentcar"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      ROLE_MIGRATOR_PASSWORD: INSECURE_DEV_ci_migrator
+      ROLE_APP_PASSWORD: INSECURE_DEV_ci_app
+      ROLE_BACKUP_PASSWORD: INSECURE_DEV_ci_backup
+      PGPASSWORD: INSECURE_DEV_ci_postgres_admin
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Bootstrap roles and database
+        run: |
+          psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U rentcar_admin -d postgres \
+            -v migrator_pw="$ROLE_MIGRATOR_PASSWORD" -v app_pw="$ROLE_APP_PASSWORD" \
+            -v backup_pw="$ROLE_BACKUP_PASSWORD" -f db/bootstrap.sql
+      - name: Run migrations
+        env:
+          DIRECT_DATABASE_URL: postgres://rentcar_migrator:${{ env.ROLE_MIGRATOR_PASSWORD }}@127.0.0.1:5432/rentcar
+        run: pnpm run build:scripts && node dist-scripts/migrate.mjs
+      - name: Integration tests
+        env:
+          TEST_DATABASE_ADMIN_URL: postgres://rentcar_admin:${{ env.PGPASSWORD }}@127.0.0.1:5432/rentcar
+          TEST_DIRECT_DATABASE_URL: postgres://rentcar_migrator:${{ env.ROLE_MIGRATOR_PASSWORD }}@127.0.0.1:5432/rentcar
+          TEST_DATABASE_URL: postgres://rentcar_app:${{ env.ROLE_APP_PASSWORD }}@127.0.0.1:5432/rentcar
+        run: pnpm run test:integration
+
+  e2e:
+    name: end-to-end (Playwright, desktop and phone widths)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs: [lint-types-arch, unit]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Start the stack
+        run: |
+          cp .env.example .env
+          docker compose up -d --build --wait --wait-timeout 240
+      - run: pnpm run test:e2e
+      - name: Upload report on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+      - name: Stop the stack
+        if: always()
+        run: docker compose down -v
+
+  image-smoke:
+    name: image builds and starts (AC1 skeleton)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Start the local stack
+        run: |
+          cp .env.example .env
+          docker compose up -d --build --wait --wait-timeout 240
+      - name: Liveness endpoint
+        run: curl --fail --silent http://127.0.0.1:3000/api/healthz
+      - name: Stop
+        if: always()
+        run: docker compose down -v

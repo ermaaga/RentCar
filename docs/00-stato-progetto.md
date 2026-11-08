@@ -1,6 +1,6 @@
 # Project status: Car Rental System (RentCar)
 
-APPROVAZIONE_IMPLEMENTAZIONE: IN_ATTESA
+APPROVAZIONE_IMPLEMENTAZIONE: APPROVATA
 APPROVAZIONE_GO_LIVE: IN_ATTESA
 
 > Security sign-off: see `docs/security/sign-off.md` (a BLOCKED sign-off prevents closing milestones and gates).
@@ -10,10 +10,10 @@ APPROVAZIONE_GO_LIVE: IN_ATTESA
 ## Summary
 - **Traffic light**: 🟢 on track · reason: discovery in progress, full spec received
 - **Original request**: multi-tenant car rental SaaS — full spec in `docs/spec/car-rental-spec.md`
-- **Current phase**: 3 — Architecture and technology choice
-- **Next step**: solution-architect options + devops/observability/security inputs; cybersecurity-manager risk level; GATE 2 (user chooses option)
-- **Feature in progress**: —
-- **Activity in progress**: solution-architect, devops-engineer, observability-engineer, security-engineer (parallel)
+- **Current phase**: 6 — Implementation (M0 in progress)
+- **Next step**: GitHub CI green on PR #1, then owner decides merge and CSM-4 ruleset; CSM-5 spike S1 before M3. Former M0 list (done):  dependency-cruiser/jscpd/knip, Vitest, DB roles + migration runner (replaces migrate stub), ci.yml, security.yml, Playwright, governance, disabled deploy workflows; CSM-5 spike S1 decision needed before M3
+- **Feature in progress**: M0 Foundations (branch feat/m0-foundations)
+- **Activity in progress**: M0 closed locally; PR #1 (draft, feat/m0-foundations) open, waiting for GitHub CI; see docs/test-reports/m0.md section 3 for open evidence
 - **Decisions expected from the user**: none until requirements questions
 - **Open risks and issues**: see `docs/pm/raid.md`
 
@@ -23,10 +23,10 @@ APPROVAZIONE_GO_LIVE: IN_ATTESA
 | 0 | Kick-off | done | 00-stato-progetto.md, pm/raid.md, spec/ |
 | 1 | Discovery | done | 01-discovery.md |
 | 2 | Requirements — GATE 1 | done (approved) | 02-requisiti.md |
-| 3 | Architecture — GATE 2 | in progress | 03-architettura.md, 03b-struttura-codice.md, adr/ |
-| 4 | Detailed design | to do | 04…12 |
-| 5 | Questions and approval — GATE 3 | to do | 13-piano-implementazione.md |
-| 6 | Implementation | to do | reviews/, test-reports/ |
+| 3 | Architecture — GATE 2 | done (Option A) | 03-architettura.md, 03b-struttura-codice.md, adr/ |
+| 4 | Detailed design | done | 04…12 |
+| 5 | Questions and approval — GATE 3 | done (approved by user 2026-11-08; security sign-off APPROVED WITH RISKS 2026-11-03) | 13-piano-implementazione.md |
+| 6 | Implementation | in progress (M0) | reviews/, test-reports/ |
 | 7 | Pre-release verification | to do | reviews/, test-reports/ |
 | 8 | Documentation | to do | README, docs/manual/ |
 | 9 | Go-live — GATE 4 | to do | 14-go-live.md |
@@ -38,7 +38,7 @@ APPROVAZIONE_GO_LIVE: IN_ATTESA
 - **Language for questions to the user**: Italian (user request).
 - **UI languages**: English only at launch, simple single-locale i18n structure (spec §10, user 2026-11-01).
 - **Criticality and SLOs**: low for now, no alerting/on-call; free-tier monitoring only
-- **Chosen visual direction**: — (constraints from spec §10.2: shadcn/ui + Tailwind, Lucide, per-tenant CSS tokens, light/dark, self-hosted fonts)
+- **Chosen visual direction**: **Clear** + 3 borrowings (Field: large time numerals and 48 px targets on Today, 3 px focus ring; Warm: friendlier confirmation copy) — docs/design/clear/, user choice 2026-11-01
 
 ## Key decisions
 | Date | Decision | Rationale | Reference |
@@ -50,12 +50,31 @@ APPROVAZIONE_GO_LIVE: IN_ATTESA
 | 2026-11-01 | Scale 1–10 tenants at launch, <50 in 12 months; Italy/EU; one currency + time zone per tenant | User answer | 01-discovery.md |
 | 2026-11-01 | Path-based `/{slug}` now; single tenant-resolution point for future custom domains | User answer | 01-discovery.md C12 |
 | 2026-11-01 | Full spec scope, no fixed deadline | User answer | 01-discovery.md B8 |
+| 2026-11-01 | Git: user creates the repository; one commit per completed task (English messages) | User request | — |
+| 2026-11-01 | CI: GitHub Actions running tests (lint, typecheck, unit, integration with Postgres, Playwright E2E incl. mobile viewports, security scans) on every push/PR — to be created in M0 by devops-engineer after GATE 3 | User request | 13-piano-implementazione.md (M0) |
+| 2026-11-01 | No card numbers or identity documents stored anywhere (SEC-5) | User answer | 03-inputs/security-constraints.md |
+| 2026-11-01 | Production hosting, monthly budget, ops time and legal review (OPS-2, OPS-3, SEC-6, ARC-2, ARC-5, ARC-6) DEFERRED: focus on building the software locally first; decide before go-live. GATE 2 decides the code-level bundle only | User answer | 03-architettura.md |
+| 2026-11-01 | GATE 2: code bundle **Option A** — Drizzle, in-house DB-backed sessions (argon2id), repository scoping + Postgres RLS, react-pdf, cron endpoint + lazy jobs, nodemailer + outbox, Postgres rate-limit table. Production host (Vercel Pro vs EU VPS) deferred; code is host-portable | User choice (ARC-1) | 03-architettura.md, adr/ |
+| 2026-11-01 | Postgres RLS from the first migration (ARC-3) | User choice | ADR-0003 |
+| 2026-11-01 | Vehicle photo limit 4 MB with client-side downscale (ARC-4; changes requirement A-23) | User choice | ADR-0009 |
+| 2026-11-01 | New users get a one-time set-password link valid 24 h instead of a temporary password (SEC-3; spec deviation §4) | User choice | ADR-0005 |
+| 2026-11-01 | Security level OWASP ASVS 4.0.3 L2; password min length 12 | cybersecurity-manager | security/sign-off.md |
+| 2026-11-01 | Tenant data after termination: export, hard delete after 90 days (SEC-7) | User choice | 02-requisiti.md |
+| 2026-11-01 | No MFA, no SMTP-change controls, no CAPTCHA switch: residual risks ACCEPTED by user until GATE 4 | User acceptance | security/registro-rischi.md |
+| 2026-11-01 | SEO: only /{slug} root indexable (SEO-1); optional tenant short description ≤160 chars (SEO-3) and optional address (SEO-4); title ≤45 chars | User choice | 09-seo.md |
+| 2026-11-01 | Visual direction Clear + 3 borrowings (UI-1) | User choice | docs/design/index.html |
+| 2026-11-01 | Tenant colors: automatic darker shade for links/text, block only pairs with no automatic fix (UI-2; rewords FR-BRD-04/A-29) | User choice | 04b-ui-design.md |
+| 2026-11-03 | Suspended/terminated tenant public pages answer HTTP 200 + noindex (FE-1 = B; overrides SEO 503/410 proposal) | User choice | 07-frontend.md, 09-seo.md |
+| 2026-11-03 | All remaining GATE 3 questions in 13-piano-implementazione.md §8.1 answered with the recommended option (incl. SEC-14 pepper = yes, BE-6 = price agreed at booking, SEC-15 = link never shown) | User answer | 13-piano-implementazione.md §8.1 |
 | 2026-11-01 | UI: shadcn/ui on Tailwind, Lucide, per-tenant tokens | Spec constraint | spec §10.2 |
 
 ## Approval log
 | Date | Gate | Outcome | Scope / notes |
 |---|---|---|---|
 | 2026-11-01 | GATE 1 — Requirements | APPROVED by user | docs/02-requisiti.md v1.1 incl. assumptions A-1..A-39 and decisions REQ-1..REQ-16 |
+| 2026-11-03 | GATE 3 — Implementation plan | Security sign-off APPROVED WITH RISKS; user answers recorded | docs/13-piano-implementazione.md v1.0 |
+| 2026-11-08 | Implementation approval | APPROVED by user | Plan M0–M6. Branch protection (CSM-4): user will enforce at end of development, not now. CSM-5 (spike S1 before M3): still open |
+| 2026-11-01 | GATE 2 — Architecture | Option A chosen by user; security sign-off APPROVED WITH RISKS | Code bundle A; hosting deferred to before GATE 4 |
 
 ## Open questions
 | ID | Question | Raised by | Blocking | Status |

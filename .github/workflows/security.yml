@@ -1,0 +1,108 @@
+# Blocking security gate (docs/11-devops-deploy.md 4.3). Every job must be green to merge.
+# Tool images are pinned by digest; the repository is checked out with read-only credentials.
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "10.33.2"
+  GITLEAKS_IMAGE: "zricethezav/gitleaks@sha256:691af3c7c5a48b16f187ce3446d5f194838f91238f27270ed36eef6359a574d9"
+  OSV_IMAGE: "ghcr.io/google/osv-scanner@sha256:fd62daecbaaed24442031574540e8af6dbaf0ab0a3e28c626bec0dd235a28346"
+  ZIZMOR_IMAGE: "ghcr.io/zizmorcore/zizmor@sha256:a6460f1b6fe3dc08e588d314e73563bdd218ee30c995a4be5e9ee5bd300391ce"
+  TRIVY_IMAGE: "aquasec/trivy@sha256:086971aaf400beebd94e8300fd8ea623774419597169156cec56eec5b00dfb1e"
+
+jobs:
+  secrets:
+    name: secret scan (gitleaks, full history)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: |
+          docker run --rm -v "$PWD:/repo" -w /repo "$GITLEAKS_IMAGE" \
+            git /repo --config /repo/.gitleaks.toml --redact --exit-code 1 --no-banner
+      - name: Scanner detects a committed fake credential (ABU-M0-10)
+        run: bash scripts/security/gitleaks-selftest.sh
+
+  dependencies:
+    name: dependency audit (pnpm audit, OSV)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm audit --audit-level=high
+      - name: OSV-Scanner on the lockfile
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src "$OSV_IMAGE" \
+            scan source --lockfile pnpm-lock.yaml
+
+  sast:
+    name: static analysis (custom Semgrep rules)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rules prove themselves (violating fixture must fail, clean code must pass)
+        run: bash scripts/security/semgrep-selftest.sh
+
+  workflows:
+    name: GitHub Actions security (zizmor)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: |
+          docker run --rm -v "$PWD:/repo" -w /repo "$ZIZMOR_IMAGE" \
+            --min-severity medium --no-progress .github/workflows/
+
+  image:
+    name: container image (Trivy, SBOM)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the runtime image
+        run: docker build --target runner -t rentcar-app:ci .
+      - name: Vulnerabilities and secrets (fixable HIGH and CRITICAL block)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" \
+            image --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 --scanners vuln,secret rentcar-app:ci
+      - name: SBOM (CycloneDX)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/out" "$TRIVY_IMAGE" \
+            image --format cyclonedx --output /out/sbom.cdx.json rentcar-app:ci
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sbom
+          path: sbom.cdx.json
+          retention-days: 30

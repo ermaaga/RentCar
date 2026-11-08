@@ -1,0 +1,30 @@
+# Dependency updates (docs/11-devops-deploy.md 3 and 4). Grouped to keep PR volume low.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      dev-tooling:
+        dependency-type: development
+      runtime:
+        dependency-type: production
+    ignore:
+      # TypeScript 7 is incompatible with typescript-eslint today (see commit history).
+      - dependency-name: typescript
+        versions: ["7.x"]
+
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
