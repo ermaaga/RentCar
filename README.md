@@ -26,4 +26,17 @@ docker compose up --build
 
 Reset everything (including the database volume): `docker compose down -v`.
 
-> The `migrate` service is a stub until the database layer lands; it does not migrate anything yet.
+- Liveness: `/api/healthz` (process up). Readiness: `/api/readyz` (database reachable, 503 otherwise).
+- Migrations run automatically in the `migrate` service and are recorded in `schema_migrations`.
+
+## Checks
+
+```sh
+pnpm install
+pnpm run format:check && pnpm run lint && pnpm run typecheck
+pnpm run test:coverage            # unit tests
+pnpm run arch                     # run with Node 22 (dependency-cruiser)
+pnpm run test:integration         # needs TEST_* database URLs (see tests/integration)
+pnpm run test:e2e                 # needs the running stack
+bash scripts/security/semgrep-selftest.sh
+```
