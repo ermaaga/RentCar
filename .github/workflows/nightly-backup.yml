@@ -1,0 +1,21 @@
+# DISABLED until a production database exists (docs/11-devops-deploy.md 10). No schedule is set.
+# Manual trigger only; the job runs only when ENABLE_BACKUP is 'true'.
+name: nightly-backup
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    name: database backup (disabled)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    if: vars.ENABLE_BACKUP == 'true'
+    environment: backup
+    steps:
+      - name: Plan
+        run: |
+          echo "Backup plan: pg_dump as rentcar_backup, encrypt with the backup key, upload with a 30-day retention, verify the checksum."

@@ -1,0 +1,31 @@
+# DISABLED until GATE 4 (hosting not chosen; no real data outside local Docker, sign-off C1).
+# Manual trigger only, and the job refuses to run unless ENABLE_DEPLOY is set to 'true'.
+# Dry run by default: prints what it would do.
+name: deploy-staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print the plan only"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: deploy to staging (disabled)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    if: vars.ENABLE_DEPLOY == 'true'
+    environment: staging
+    steps:
+      - name: Plan
+        run: |
+          echo "dry_run=${{ inputs.dry_run }}"
+          echo "Deploy plan: build image by digest, run migrate, smoke test /api/healthz, rollback on failure."
+      - name: Deploy
+        if: inputs.dry_run == false
+        run: echo "Deployment target not configured. Nothing deployed."

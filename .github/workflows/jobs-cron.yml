@@ -1,0 +1,24 @@
+# DISABLED. Hourly job runner (ADR-0007) is not scheduled until a deployed app exists.
+# The schedule is intentionally absent; manual trigger does a dry run only.
+name: jobs-cron
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print the request only"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  run-jobs:
+    name: trigger due jobs (disabled)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    if: vars.ENABLE_JOBS == 'true'
+    steps:
+      - name: Plan
+        run: echo "Would POST /api/jobs/run with the CRON_SECRET bearer token (dry_run=${{ inputs.dry_run }})."

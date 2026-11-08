@@ -1,0 +1,19 @@
+# DISABLED until a backup exists. Restore drill into an ephemeral database, never into production.
+name: restore-test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  restore:
+    name: restore drill (disabled)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    if: vars.ENABLE_BACKUP == 'true'
+    steps:
+      - name: Plan
+        run: |
+          echo "Restore plan: start an ephemeral Postgres 16, restore the latest dump, replay the migration ledger, run the integration suite."
