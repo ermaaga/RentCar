@@ -129,6 +129,40 @@ jobs:
           TEST_DATABASE_URL: postgres://rentcar_app:${{ env.ROLE_APP_PASSWORD }}@127.0.0.1:5432/rentcar
         run: pnpm run test:integration
 
+  e2e:
+    name: end-to-end (Playwright, desktop and phone widths)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs: [lint-types-arch, unit]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Start the stack
+        run: |
+          cp .env.example .env
+          docker compose up -d --build --wait --wait-timeout 240
+      - run: pnpm run test:e2e
+      - name: Upload report on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+      - name: Stop the stack
+        if: always()
+        run: docker compose down -v
+
   image-smoke:
     name: image builds and starts (AC1 skeleton)
     runs-on: ubuntu-24.04

@@ -35,6 +35,8 @@ jobs:
       - run: |
           docker run --rm -v "$PWD:/repo" -w /repo "$GITLEAKS_IMAGE" \
             git /repo --config /repo/.gitleaks.toml --redact --exit-code 1 --no-banner
+      - name: Scanner detects a committed fake credential (ABU-M0-10)
+        run: bash scripts/security/gitleaks-selftest.sh
 
   dependencies:
     name: dependency audit (pnpm audit, OSV)
