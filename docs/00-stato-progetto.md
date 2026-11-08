@@ -1,6 +1,6 @@
 # Project status: Car Rental System (RentCar)
 
-APPROVAZIONE_IMPLEMENTAZIONE: IN_ATTESA
+APPROVAZIONE_IMPLEMENTAZIONE: APPROVATA
 APPROVAZIONE_GO_LIVE: IN_ATTESA
 
 > Security sign-off: see `docs/security/sign-off.md` (a BLOCKED sign-off prevents closing milestones and gates).
@@ -10,10 +10,10 @@ APPROVAZIONE_GO_LIVE: IN_ATTESA
 ## Summary
 - **Traffic light**: 🟢 on track · reason: discovery in progress, full spec received
 - **Original request**: multi-tenant car rental SaaS — full spec in `docs/spec/car-rental-spec.md`
-- **Current phase**: 5 — GATE 3 questions and implementation approval
-- **Next step**: user answers 13-piano-implementazione.md §8.1; cybersecurity-manager plan sign-off; approval
-- **Feature in progress**: —
-- **Activity in progress**: PM → GATE 3 questions
+- **Current phase**: 6 — Implementation (M0 in progress)
+- **Next step**: M0 commits 1–10 (docs/11-devops-deploy.md §12); CSM-5 spike S1 decision needed before M3
+- **Feature in progress**: M0 Foundations (branch feat/m0-foundations)
+- **Activity in progress**: M0 implementation
 - **Decisions expected from the user**: none until requirements questions
 - **Open risks and issues**: see `docs/pm/raid.md`
 
@@ -25,8 +25,8 @@ APPROVAZIONE_GO_LIVE: IN_ATTESA
 | 2 | Requirements — GATE 1 | done (approved) | 02-requisiti.md |
 | 3 | Architecture — GATE 2 | done (Option A) | 03-architettura.md, 03b-struttura-codice.md, adr/ |
 | 4 | Detailed design | done | 04…12 |
-| 5 | Questions and approval — GATE 3 | in progress | 13-piano-implementazione.md |
-| 6 | Implementation | to do | reviews/, test-reports/ |
+| 5 | Questions and approval — GATE 3 | done (approved by user 2026-11-08; security sign-off APPROVED WITH RISKS 2026-11-03) | 13-piano-implementazione.md |
+| 6 | Implementation | in progress (M0) | reviews/, test-reports/ |
 | 7 | Pre-release verification | to do | reviews/, test-reports/ |
 | 8 | Documentation | to do | README, docs/manual/ |
 | 9 | Go-live — GATE 4 | to do | 14-go-live.md |
@@ -72,6 +72,8 @@ APPROVAZIONE_GO_LIVE: IN_ATTESA
 | Date | Gate | Outcome | Scope / notes |
 |---|---|---|---|
 | 2026-11-01 | GATE 1 — Requirements | APPROVED by user | docs/02-requisiti.md v1.1 incl. assumptions A-1..A-39 and decisions REQ-1..REQ-16 |
+| 2026-11-03 | GATE 3 — Implementation plan | Security sign-off APPROVED WITH RISKS; user answers recorded | docs/13-piano-implementazione.md v1.0 |
+| 2026-11-08 | Implementation approval | APPROVED by user | Plan M0–M6. Branch protection (CSM-4): user will enforce at end of development, not now. CSM-5 (spike S1 before M3): still open |
 | 2026-11-01 | GATE 2 — Architecture | Option A chosen by user; security sign-off APPROVED WITH RISKS | Code bundle A; hosting deferred to before GATE 4 |
 
 ## Open questions
