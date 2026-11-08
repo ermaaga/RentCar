@@ -13,5 +13,5 @@ paths = ['''tests/security/semgrep-fixtures/''']
 # split at run time in the next commit. The key is fake (generated for ABU-M0-10), so the commit is
 # allowlisted by hash instead of rewriting shared history.
 [[allowlists]]
-description = "Fake AWS key in the scanner self-test, historical commit 6c3a845 (ABU-M0-10)"
-commits = ["6c3a8457cce6c899772818a55c9bedbf6ee1622d"]
+description = "Fake AWS key in the scanner self-test, historical commit 3b3d53a (ABU-M0-10)"
+commits = ["3b3d53a129ff325ccf884290709f36cce888e8a4"]
