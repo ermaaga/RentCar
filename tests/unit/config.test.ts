@@ -18,6 +18,7 @@ const COMPOSE_ONLY = [
   "ROLE_MIGRATOR_PASSWORD",
   "ROLE_APP_PASSWORD",
   "ROLE_BACKUP_PASSWORD",
+  "COMPOSE_PROFILES",
 ];
 
 function envKeysInExample(): string[] {

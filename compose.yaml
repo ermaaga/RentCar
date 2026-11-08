@@ -41,6 +41,25 @@ services:
         condition: service_healthy
     restart: "no"
 
+  seed:
+    <<: *app-image
+    profiles: ["seed"]
+    command: ["node", "dist-scripts/seed.mjs"]
+    environment:
+      APP_ENV: local
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  mailpit:
+    image: axllent/mailpit:v1.21.8@sha256:81370195cd4a0eab9604d17c2617a7525b0486f9365555253b6c5376c6350f1a
+    profiles: ["mail"]
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
+    restart: unless-stopped
+
   app:
     <<: *app-image
     environment:
