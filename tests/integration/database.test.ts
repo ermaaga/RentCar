@@ -58,6 +58,23 @@ describe.skipIf(!urls)("database roles and migrations", () => {
     expect(canCreate).toBe(false);
   });
 
+  it("ABU-M0-01: runtime role owns no objects and cannot create roles", async () => {
+    const owned = await scalar<number>(
+      u.app,
+      "SELECT count(*)::int FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner WHERE r.rolname = current_user",
+    );
+    const canCreateRole = await scalar<boolean>(
+      u.app,
+      "SELECT rolcreaterole FROM pg_roles WHERE rolname = current_user",
+    );
+    expect(owned).toBe(0);
+    expect(canCreateRole).toBe(false);
+  });
+});
+
+describe.skipIf(!urls)("database ownership", () => {
+  const u = urls ?? { admin: "", migrator: "", app: "" };
+
   it("database is owned by the owner role, not by the bootstrap superuser", async () => {
     const owner = await scalar<string>(
       u.admin,
