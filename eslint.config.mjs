@@ -39,8 +39,8 @@ export default tseslint.config(
     },
   },
   {
-    // Scripts and tests may read the environment; application code may not (03b section 3, rule 2).
-    files: ["scripts/**", "tests/**"],
+    // Only platform/config (and the Next.js runtime flag in instrumentation) may read the environment (03b section 9).
+    files: ["scripts/**", "tests/**", "src/platform/config/**", "src/instrumentation.ts"],
     rules: { "no-process-env": "off" },
   },
   {

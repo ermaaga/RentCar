@@ -33,3 +33,9 @@ test("liveness endpoint answers without touching the database", async ({ request
   expect(res.status()).toBe(200);
   expect(await res.json()).toEqual({ status: "ok" });
 });
+
+test("readiness endpoint reports the database as reachable", async ({ request }) => {
+  const res = await request.get("/api/readyz");
+  expect(res.status()).toBe(200);
+  expect(await res.json()).toEqual({ status: "ready" });
+});

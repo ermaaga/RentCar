@@ -1,2 +1,3 @@
 export { loadConfig, ConfigError } from "./load";
-export { configSchema } from "./schema";
+export { configSchema, type AppConfig } from "./schema";
+export { getConfig } from "./runtime";
