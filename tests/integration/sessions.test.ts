@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import { login, resolveSession, revokeSession } from "../../src/modules/auth";
 import { hashPassword } from "../../src/platform/crypto/password";
 import { hashToken } from "../../src/platform/crypto/token";
+import { deriveKey } from "../../src/platform/crypto/keys";
+import { purgeExpired } from "../../src/modules/auth/infrastructure/throttle";
 
 // Login and sessions against a real Postgres as the runtime role (docs/05-database.md 5.5, 5.6).
 const adminUrl = process.env.TEST_DATABASE_ADMIN_URL;
@@ -12,6 +14,7 @@ const appUrl = process.env.TEST_DATABASE_URL;
 const PEPPER = "p".repeat(40);
 const PASSWORD = "correct horse battery";
 const MIN = 60_000;
+const HMAC_KEY = deriveKey("m".repeat(40), "ratelimit");
 const admin = new pg.Pool({ connectionString: adminUrl, max: 2 });
 const app = new pg.Pool({ connectionString: appUrl, max: 2 });
 const now = new Date();
@@ -42,19 +45,23 @@ async function cleanup(f: Fixture): Promise<void> {
   await admin.query("DELETE FROM tenants WHERE id = $1", [f.tenantId]);
 }
 
-async function tryLogin(f: Fixture, username: string, password: string) {
-  return login(app, { tenantId: f.tenantId, username, password, peppers: [PEPPER], now });
+async function tryLogin(f: Fixture, username: string, password: string, at: Date = now) {
+  return login(app, {
+    tenantId: f.tenantId,
+    username,
+    password,
+    peppers: [PEPPER],
+    hmacKey: HMAC_KEY,
+    now: at,
+  });
 }
 
 async function openSession(f: Fixture): Promise<string> {
-  const ok = await login(app, {
-    tenantId: f.tenantId,
-    username: "operator1",
-    password: PASSWORD,
-    peppers: [PEPPER],
-    now,
-  });
-  return ok?.token ?? "";
+  const result = await tryLogin(f, "operator1", PASSWORD);
+  if (result.status !== "ok") {
+    throw new Error(`login failed: ${result.status}`);
+  }
+  return result.token;
 }
 
 describe.skipIf(!adminUrl || !appUrl)("login", () => {
@@ -75,7 +82,7 @@ describe.skipIf(!adminUrl || !appUrl)("login", () => {
   it("refuses a wrong password", async () => {
     const f = await seed();
     try {
-      expect(await tryLogin(f, "operator1", "wrong password here")).toBeNull();
+      expect(await tryLogin(f, "operator1", "wrong password here")).toEqual({ status: "invalid" });
     } finally {
       await cleanup(f);
     }
@@ -84,7 +91,7 @@ describe.skipIf(!adminUrl || !appUrl)("login", () => {
   it("refuses an unknown user with the same answer", async () => {
     const f = await seed();
     try {
-      expect(await tryLogin(f, "nobody1", PASSWORD)).toBeNull();
+      expect(await tryLogin(f, "nobody1", PASSWORD)).toEqual({ status: "invalid" });
     } finally {
       await cleanup(f);
     }
@@ -149,5 +156,75 @@ describe.skipIf(!adminUrl || !appUrl)("session storage", () => {
     } finally {
       await cleanup(f);
     }
+  });
+});
+
+describe.skipIf(!adminUrl || !appUrl)("login lockout", () => {
+  it("refuses every attempt after 5 failures in a window, even with the right password", async () => {
+    const f = await seed();
+    try {
+      for (let i = 0; i < 5; i += 1) {
+        expect(await tryLogin(f, "operator1", "wrong password here")).toEqual({
+          status: "invalid",
+        });
+      }
+      const blocked = await tryLogin(f, "operator1", PASSWORD);
+      expect(blocked.status).toBe("throttled");
+      expect(blocked.status === "throttled" && blocked.retryAfterSeconds >= 1).toBe(true);
+    } finally {
+      await cleanup(f);
+    }
+  });
+
+  it("does not throttle a different username of the same tenant", async () => {
+    const f = await seed();
+    try {
+      for (let i = 0; i < 5; i += 1) {
+        await tryLogin(f, "operator1", "wrong password here");
+      }
+      const other = await tryLogin(f, "nobody1", PASSWORD);
+      expect(other).toEqual({ status: "invalid" });
+    } finally {
+      await cleanup(f);
+    }
+  });
+});
+
+describe.skipIf(!adminUrl || !appUrl)("login lockout window", () => {
+  it("reopens the window after 15 minutes", async () => {
+    const f = await seed();
+    try {
+      for (let i = 0; i < 5; i += 1) {
+        await tryLogin(f, "operator1", "wrong password here");
+      }
+      const later = new Date(now.getTime() + 16 * MIN);
+      expect((await tryLogin(f, "operator1", PASSWORD, later)).status).toBe("ok");
+    } finally {
+      await cleanup(f);
+    }
+  });
+});
+
+describe.skipIf(!adminUrl || !appUrl)("rate-limit purge", () => {
+  it("removes counters past their expiry and keeps live ones", async () => {
+    const past = new Date(now.getTime() - 3 * 3_600_000);
+    const expiredKey = "e".repeat(64);
+    const liveKey = "f".repeat(64);
+    await admin.query(
+      `INSERT INTO rate_limit_buckets (key, window_start, count, expires_at) VALUES
+         ($1, $2, 3, $3), ($4, now(), 1, now() + interval '1 hour')`,
+      [expiredKey, past, new Date(past.getTime() + 60 * MIN), liveKey],
+    );
+    const removed = await purgeExpired(admin, now);
+    const left = await admin.query<{ key: string }>(
+      "SELECT key FROM rate_limit_buckets WHERE key IN ($1, $2)",
+      [expiredKey, liveKey],
+    );
+    await admin.query("DELETE FROM rate_limit_buckets WHERE key IN ($1, $2)", [
+      expiredKey,
+      liveKey,
+    ]);
+    expect(removed).toBeGreaterThanOrEqual(1);
+    expect(left.rows.map((r) => r.key)).toEqual([liveKey]);
   });
 });
