@@ -49,6 +49,9 @@ describe.each(Object.entries(themes))("token contrast (%s theme)", (_name, t) =>
   it("muted text on background is at least 4.5:1", () => {
     expect(ratio(color("muted-foreground"), bg)).toBeGreaterThanOrEqual(4.5);
   });
+  it("error text on background is at least 4.5:1", () => {
+    expect(ratio(color("danger"), bg)).toBeGreaterThanOrEqual(4.5);
+  });
   it("primary button text on primary is at least 4.5:1", () => {
     expect(ratio(color("primary-foreground"), color("primary"))).toBeGreaterThanOrEqual(4.5);
   });

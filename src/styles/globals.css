@@ -9,6 +9,7 @@
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-border: var(--border);
+  --color-danger: var(--danger);
   --font-sans: var(--font-sans);
 }
 
