@@ -20,6 +20,11 @@ export default async function AdminHomePage(props: { params: Promise<{ slug: str
           {t("auth.account.link")}
         </Link>
         {session.role === "admin" ? (
+          <Link href={`/${tenant.slug}/admin/operators`} className="underline underline-offset-4">
+            {t("operators.link")}
+          </Link>
+        ) : null}
+        {session.role === "admin" ? (
           <Link
             href={`/${tenant.slug}/admin/settings/email`}
             className="underline underline-offset-4"

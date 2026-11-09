@@ -6,7 +6,7 @@ import { getContainer } from "@/composition/container";
 import { getTranslator } from "@/i18n";
 import { credentialPath, issuePasswordResets, SYSTEM_REALM, tenantRealm } from "@/modules/auth";
 import type { AuthFormState } from "@/modules/auth/ui/form-state";
-import { renderCredentialEmail } from "@/modules/notifications";
+import { renderCredentialEmail, sendTenantMail } from "@/modules/notifications";
 import { resolveTenantBySlug } from "@/modules/tenancy";
 import { hitRateLimit, RATE_LIMITS } from "@/platform/rate-limit/postgres";
 
@@ -63,7 +63,12 @@ async function mailReset(realm: LinkRealm, r: Recipient, ip: string): Promise<vo
     },
     getTranslator(),
   );
-  await c.mailer.sendSystem(mail);
+  // Admins and the systemadmin through the system SMTP; operators through the tenant SMTP (SEC-12).
+  if (r.role === "operator" && realm.kind === "tenant") {
+    await sendTenantMail(c, realm.tenantId, mail);
+  } else {
+    await c.mailer.sendSystem(mail);
+  }
 }
 
 async function sendResets(realm: LinkRealm, identifier: string, ip: string): Promise<void> {
@@ -78,10 +83,7 @@ async function sendResets(realm: LinkRealm, identifier: string, ip: string): Pro
     now: c.clock.now(),
   });
   for (const r of recipients) {
-    // Operators reset through the tenant SMTP, which arrives with tenant mail settings (US-002).
-    if (r.role !== "operator") {
-      await mailReset(realm, r, ip);
-    }
+    await mailReset(realm, r, ip);
   }
 }
 
