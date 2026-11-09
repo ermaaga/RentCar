@@ -2,8 +2,8 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page } from "@playwright/test";
 
 // Shared steps of the end-to-end specs: owner sign-in, tenant creation, mailed links, axe checks.
-export const MAILPIT = process.env.E2E_MAILPIT_URL ?? "http://127.0.0.1:8025";
-export const OWNER_PASSWORD = process.env.E2E_OWNER_PASSWORD ?? "INSECURE_DEV_owner_password";
+const MAILPIT = process.env.E2E_MAILPIT_URL ?? "http://127.0.0.1:8025";
+const OWNER_PASSWORD = process.env.E2E_OWNER_PASSWORD ?? "INSECURE_DEV_owner_password";
 export const ADMIN_PASSWORD = "a long admin passphrase";
 export const NEW_ADMIN_PASSWORD = "an even longer admin passphrase";
 

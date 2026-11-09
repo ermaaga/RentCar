@@ -10,8 +10,6 @@ import type { PeriodRules } from "../domain/period-rules";
 // bookmarkable. The plain search form submits date and time separately (it works without JavaScript);
 // both shapes parse to the same query and the canonical URL uses `pickup`/`return` only.
 
-export const SEARCH_CATEGORIES = VEHICLE_CATEGORIES;
-export const SEARCH_FUELS = FUEL_TYPES;
 export const SEAT_OPTIONS = [2, 4, 5, 7] as const;
 
 const LOCAL = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
@@ -22,8 +20,8 @@ export interface SearchQuery {
   pickup: string;
   return: string;
   sort: "price-asc" | "price-desc";
-  category: (typeof SEARCH_CATEGORIES)[number][];
-  fuel?: (typeof SEARCH_FUELS)[number] | undefined;
+  category: (typeof VEHICLE_CATEGORIES)[number][];
+  fuel?: (typeof FUEL_TYPES)[number] | undefined;
   seats?: number | undefined;
 }
 
@@ -40,7 +38,7 @@ const schema = z.object({
   returnTime: single,
   sort: z.enum(["price-asc", "price-desc"]).optional(),
   category: z.array(z.string().max(80)).max(8).optional(),
-  fuel: z.enum(SEARCH_FUELS).optional(),
+  fuel: z.enum(FUEL_TYPES).optional(),
   seats: z.coerce.number().int().min(1).max(20).optional(),
 });
 
@@ -57,7 +55,7 @@ function localValue(p: z.infer<typeof schema>, name: "pickup" | "return"): strin
 
 function categories(values: readonly string[] | undefined): SearchQuery["category"] | undefined {
   const all = (values ?? []).flatMap((v) => v.split(",")).filter((v) => v !== "");
-  const known = new Set<string>(SEARCH_CATEGORIES);
+  const known = new Set<string>(VEHICLE_CATEGORIES);
   if (!all.every((v) => known.has(v))) return undefined;
   return [...new Set(all)] as SearchQuery["category"];
 }

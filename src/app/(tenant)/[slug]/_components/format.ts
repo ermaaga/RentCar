@@ -4,10 +4,6 @@ import type { PeriodError } from "@/modules/booking";
 // Display helpers for the public pages (docs/04a-ux.md 6.4): amounts in the tenant currency, local
 // date-times shown as written (they already are tenant-local), durations in plain words.
 
-export function money(minor: number, currency: string): string {
-  return new Intl.NumberFormat("en", { style: "currency", currency }).format(minor / 100);
-}
-
 /** "2026-06-03T10:00" -> "Wed 03 Jun 2026, 10:00" (the string is already in the tenant zone). */
 export function localLabel(value: string): string {
   const [date = "", time = ""] = value.split("T");

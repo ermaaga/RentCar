@@ -17,7 +17,7 @@ function LegalLink(props: { href: string | null; label: string }) {
   );
 }
 
-export function ContactBlock({ tenant }: { tenant: PublicTenant }) {
+function ContactBlock({ tenant }: { tenant: PublicTenant }) {
   const t = getTranslator();
   const a = tenant.address;
   return (
