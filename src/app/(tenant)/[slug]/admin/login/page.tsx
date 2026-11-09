@@ -17,6 +17,7 @@ export default async function TenantLoginPage(props: {
   return (
     <AuthCard title={`${t("auth.login.title")} · ${tenant.name}`}>
       <LoginForm
+        forgotHref={`/${tenant.slug}/admin/forgot-password`}
         action={loginTenantAction.bind(null, tenant.slug)}
         notice={query.passwordSet === "1"}
       />

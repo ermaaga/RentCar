@@ -12,7 +12,11 @@ export default async function SystemLoginPage(props: {
   const params = await props.searchParams;
   return (
     <AuthCard title={t("auth.login.systemTitle")}>
-      <LoginForm action={loginSystemAction} notice={params.passwordSet === "1"} />
+      <LoginForm
+        forgotHref="/system/forgot-password"
+        action={loginSystemAction}
+        notice={params.passwordSet === "1"}
+      />
     </AuthCard>
   );
 }

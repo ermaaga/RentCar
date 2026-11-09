@@ -6,6 +6,7 @@ import { expect, test, type Page } from "@playwright/test";
 const MAILPIT = process.env.E2E_MAILPIT_URL ?? "http://127.0.0.1:8025";
 const OWNER_PASSWORD = process.env.E2E_OWNER_PASSWORD ?? "INSECURE_DEV_owner_password";
 const ADMIN_PASSWORD = "a long admin passphrase";
+const NEW_ADMIN_PASSWORD = "an even longer admin passphrase";
 
 async function expectAccessible(page: Page): Promise<void> {
   const results = await new AxeBuilder({ page })
@@ -48,25 +49,30 @@ async function createTenant(page: Page, slug: string, email: string): Promise<vo
   );
 }
 
-async function activationLink(page: Page, email: string): Promise<string> {
-  const search = await page.request.get(
-    `${MAILPIT}/api/v1/search?query=${encodeURIComponent(`to:${email}`)}`,
-  );
-  const { messages } = (await search.json()) as { messages: { ID: string }[] };
-  const id = messages[0]?.ID ?? "";
-  const message = await page.request.get(`${MAILPIT}/api/v1/message/${id}`);
-  const { Text } = (await message.json()) as { Text: string };
-  const match = /https?:\/\/\S+\/admin\/activate\?token=\S+/.exec(Text);
-  return match?.[0] ?? "";
+/** Latest link of the given page (`activate` or `reset-password`) mailed to the address. */
+async function mailedLink(page: Page, email: string, kind: string): Promise<string> {
+  let link = "";
+  await expect(async () => {
+    const query = encodeURIComponent(`to:${email}`);
+    const search = await page.request.get(`${MAILPIT}/api/v1/search?query=${query}`);
+    const { messages } = (await search.json()) as { messages: { ID: string }[] };
+    for (const { ID } of messages) {
+      const message = await page.request.get(`${MAILPIT}/api/v1/message/${ID}`);
+      const { Text } = (await message.json()) as { Text: string };
+      link = new RegExp(`https?://\\S+/admin/${kind}\\?token=\\S+`).exec(Text)?.[0] ?? "";
+      if (link) break;
+    }
+    expect(link).not.toBe("");
+  }).toPass({ timeout: 10_000 });
+  return link;
 }
-
 test("owner creates a tenant and its admin activates the account", async ({ page }, info) => {
   const slug = `e2e-${info.project.name}-${Date.now().toString(36)}`.slice(0, 40);
   const email = `${slug}@rentcar.localhost`;
   await signInOwner(page);
   await createTenant(page, slug, email);
 
-  const link = await activationLink(page, email);
+  const link = await mailedLink(page, email, "activate");
   expect(link).not.toBe("");
   await page.goto(link);
   await expect(page.getByRole("heading", { level: 1, name: "Set your password" })).toBeVisible();
@@ -86,7 +92,30 @@ test("owner creates a tenant and its admin activates the account", async ({ page
 
   await page.goto(link);
   await expect(page.getByRole("main").getByRole("alert")).toContainText("already been used");
+
+  await resetAdminPassword(page, slug, email);
 });
+
+async function resetAdminPassword(page: Page, slug: string, email: string): Promise<void> {
+  await page.goto(`/${slug}/admin/login`);
+  await page.getByRole("link", { name: "Forgot your password?" }).click();
+  await expectAccessible(page);
+  await page.getByLabel("Username or email").fill(email);
+  await page.getByRole("button", { name: "Send reset link" }).click();
+  await expect(page.getByRole("main").getByRole("status")).toContainText("If an account matches");
+  await page.goto(await mailedLink(page, email, "reset-password"));
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Choose a new password" }),
+  ).toBeVisible();
+  await page.getByLabel("New password", { exact: true }).fill(NEW_ADMIN_PASSWORD);
+  await page.getByLabel("Repeat the new password").fill(NEW_ADMIN_PASSWORD);
+  await page.getByRole("button", { name: "Save password" }).click();
+  await expect(page.getByRole("main").getByRole("status")).toContainText("Password set");
+  await page.getByLabel("Username").fill("admin1");
+  await page.getByLabel("Password").fill(NEW_ADMIN_PASSWORD);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: /Dashboard/ })).toBeVisible();
+}
 
 test("an unknown account gives the generic message", async ({ page }, info) => {
   // Never a real account here: failures count towards the lockout of that username.
