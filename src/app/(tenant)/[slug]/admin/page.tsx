@@ -16,6 +16,9 @@ export default async function AdminHomePage(props: { params: Promise<{ slug: str
       <h1 className="text-2xl font-semibold">{heading}</h1>
       <p className="mt-2">{t("admin.home.signedIn")}</p>
       <nav className="mt-4 flex flex-wrap gap-6">
+        <Link href={`/${tenant.slug}/admin/vehicles`} className="underline underline-offset-4">
+          {t("vehicles.link")}
+        </Link>
         <Link href={`/${tenant.slug}/admin/account`} className="underline underline-offset-4">
           {t("auth.account.link")}
         </Link>

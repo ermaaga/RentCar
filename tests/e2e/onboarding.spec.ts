@@ -225,3 +225,34 @@ test("admin saves email settings and manages an operator", async ({ page }, info
   await expect(page.getByText("0 of 2 operators")).toBeVisible();
   await expectAccessible(page);
 });
+
+test("admin adds, edits, puts in maintenance and archives a vehicle", async ({ page }, info) => {
+  const slug = `e2v-${info.project.name}-${Date.now().toString(36)}`.slice(0, 40);
+  await activatedAdmin(page, slug, `${slug}@rentcar.localhost`);
+
+  await page.getByRole("link", { name: "Vehicles" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Vehicles" })).toBeVisible();
+  await expect(page.getByText("0 of 10 vehicles")).toBeVisible();
+  await expectAccessible(page);
+  const add = page.getByRole("region", { name: "Add vehicle" });
+  await add.getByLabel("Name shown to customers").fill("Fiat Panda");
+  await add.getByLabel("Plate").fill("AB 123 CD");
+  await add.getByLabel("Make").fill("Fiat");
+  await add.getByLabel("Model").fill("Panda");
+  await add.getByLabel("Price per day").fill("45.50");
+  await add.getByRole("button", { name: "Add vehicle" }).click();
+  await expect(add.getByRole("status")).toContainText("Vehicle added");
+  await expect(page.getByText("1 of 10 vehicles")).toBeVisible();
+
+  await page.getByRole("link", { name: "Fiat Panda" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Fiat Panda" })).toBeVisible();
+  await expectAccessible(page);
+  await page.getByLabel("Price per day").fill("50");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText("Changes saved.")).toBeVisible();
+  await page.getByRole("button", { name: "Put in maintenance" }).click();
+  await expect(page.getByRole("button", { name: "End maintenance" })).toBeVisible();
+  await page.getByRole("button", { name: "Archive vehicle" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Vehicles" })).toBeVisible();
+  await expect(page.getByText("0 of 10 vehicles")).toBeVisible();
+});
