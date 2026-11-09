@@ -200,9 +200,11 @@ test("admin saves email settings and manages an operator", async ({ page }, info
   await page.getByRole("button", { name: "Save settings" }).click();
   await expect(page.getByRole("main").getByRole("status")).toContainText("Email settings saved");
 
-  await page.goto(`/${slug}/admin/operators`);
+  await page.goto(`/${slug}/admin`);
+  await page.getByRole("link", { name: "Operators" }).click();
+  // On failure this prints the page text that was received instead.
+  await expect(page.locator("body")).toContainText("0 of 2 operators");
   await expect(page.getByRole("heading", { level: 1, name: "Operators" })).toBeVisible();
-  await expect(page.getByText("0 of 2 operators")).toBeVisible();
   await expectAccessible(page);
   await page.getByLabel("Name").fill("Sara Bianchi");
   await page.getByLabel("Username", { exact: true }).fill("sara");

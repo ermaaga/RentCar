@@ -79,12 +79,11 @@ export default async function OperatorsPage(props: { params: Promise<{ slug: str
   const { tenant } = await requireTenantAdmin(slug);
   const c = getContainer();
   const now = c.clock.now();
-  const [operators, usage, smtp, refusal] = await Promise.all([
-    listOperators(c.pool, tenant.tenantId, now),
-    operatorUsage(c.pool, tenant.tenantId, now),
-    getSmtpSummary(c.pool, tenant.tenantId),
-    tenantWriteRefusal(tenant),
-  ]);
+  // Sequential on purpose: one request holds at most one pooled connection (pool max 5).
+  const operators = await listOperators(c.pool, tenant.tenantId, now);
+  const usage = await operatorUsage(c.pool, tenant.tenantId, now);
+  const smtp = await getSmtpSummary(c.pool, tenant.tenantId);
+  const refusal = await tenantWriteRefusal(tenant);
   const full = usage.used >= usage.max;
   const disabledReason = refusal ? t(refusal) : full ? t("operators.add.limitReached") : undefined;
   return (
