@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type * as AuthActions from "../../src/app/actions/auth";
+import { deriveKey, hmacHex } from "../../src/platform/crypto/keys";
 
 // Entry-point limits and events (docs/06-backend-api.md 3.9 RL-05/RL-08, 11.2) through the real server
 // actions; only the request context (headers, cookies) is replaced. Each test uses its own client IP.
@@ -47,11 +48,12 @@ function useFreshIp(): string {
   return request.ip;
 }
 
+/** Events of this exact IP (its HMAC), so other runs in the same /24 never count. */
 async function eventsFrom(ip: string, event: string): Promise<string[]> {
-  const prefix = `${ip.split(".").slice(0, 3).join(".")}.0/24`;
+  const ipHmac = hmacHex(deriveKey("e".repeat(40), "ratelimit"), `ip:${ip}`);
   const res = await admin.query<{ reason_code: string | null }>(
-    "SELECT reason_code FROM security_event WHERE ip_prefix = $1 AND event = $2",
-    [prefix, event],
+    "SELECT reason_code FROM security_event WHERE ip_hmac = $1 AND event = $2",
+    [ipHmac, event],
   );
   return res.rows.map((r) => r.reason_code ?? "");
 }

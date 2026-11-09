@@ -76,7 +76,12 @@ async function run(request: RunRequest): Promise<NextResponse> {
       now: c.clock.now(),
       ...request,
       budgetMs: c.jobsBudgetMs,
-      mail: { mailer: c.mailer, fieldKeys: c.fieldKeys, t: getTranslator() },
+      mail: {
+        mailer: c.mailer,
+        fieldKeys: c.fieldKeys,
+        t: getTranslator(),
+        ownerEmail: c.ownerEmail,
+      },
       elapsedMs: () => performance.now() - started,
       onEvent: (e) => {
         logger.info({ event: e.event, ...e.fields }, e.event);

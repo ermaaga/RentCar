@@ -1,68 +1,19 @@
 import type pg from "pg";
 
-import {
-  dispatchDue,
-  failStaleCredentialRows,
-  type OutboxDeps,
-  type OutboxScope,
-} from "../../notifications";
-import { getEffectiveAccess, localDate } from "../../subscriptions";
-import { dayKey, expiryKey, hourKey, type JobCounts, type JobName } from "../domain/catalogue";
+import { dispatchDue, failStaleCredentialRows, type OutboxScope } from "../../notifications";
+import { dayKey, expiryKey, hourKey, type JobCounts } from "../domain/catalogue";
+import type { JobContext, JobDefinition, PlatformJob, TenantJob, TenantTarget } from "./job-types";
+import { renewalReminder } from "./renewal-reminder";
+import { subscriptionState, type SubscriptionRow } from "./tenant-subscriptions";
+
+export type { JobDefinition, JobEvent, JobMail, TenantTarget } from "./job-types";
 
 // The job catalogue implemented so far (docs/06-backend-api.md 8.2). Each job lists its due periods
 // and does the work for one period inside the transaction the runner opened for it.
 
-export interface TenantTarget {
-  id: string;
-  slug: string;
-  status: "active" | "suspended" | "terminated";
-  timeZone: string;
-}
-
-/** Event emitted by a job; the runner forwards it to the logger (no PII, codes and ids only). */
-export interface JobEvent {
-  event: string;
-  fields: Record<string, string | number>;
-}
-
-/** Sending dependencies for mail jobs; absent in runs that must not send (then mail jobs only tidy). */
-export type JobMail = Omit<OutboxDeps, "pool">;
-
-interface JobContext {
-  /** For jobs that open their own short transactions (the outbox sends with no transaction open). */
-  pool: pg.Pool;
-  now: Date;
-  periodKey: string;
-  emit(e: JobEvent): void;
-  mail?: JobMail | undefined;
-}
-
-interface PlatformJob {
-  name: JobName;
-  scope: "platform";
-  periods(now: Date): string[];
-  run(c: pg.PoolClient, ctx: JobContext): Promise<JobCounts>;
-}
-
-interface TenantJob {
-  name: JobName;
-  scope: "tenant";
-  periods(c: pg.PoolClient, now: Date, tenant: TenantTarget): Promise<string[]>;
-  run(c: pg.PoolClient, ctx: JobContext, tenant: TenantTarget): Promise<JobCounts>;
-}
-
-export type JobDefinition = PlatformJob | TenantJob;
-
 const DAY_MS = 86_400_000;
 const EXPIRED_KEEP_MS = 7 * DAY_MS;
 const JOB_RUNS_KEEP_MS = 365 * DAY_MS;
-
-interface SubscriptionRow {
-  id: string;
-  start_date: string;
-  end_date: string;
-  status: "active" | "cancelled";
-}
 
 /** The expired subscription (if the tenant is in grace or read-only expired), else none. */
 async function expiredSubscription(
@@ -70,23 +21,11 @@ async function expiredSubscription(
   now: Date,
   tenant: TenantTarget,
 ): Promise<SubscriptionRow | undefined> {
-  const res = await c.query<SubscriptionRow>(
-    `SELECT id, to_char(start_date, 'YYYY-MM-DD') AS start_date, to_char(end_date, 'YYYY-MM-DD') AS end_date,
-            status
-       FROM subscriptions WHERE tenant_id = $1 AND status <> 'cancelled' ORDER BY end_date DESC`,
-    [tenant.id],
-  );
-  const periods = res.rows.map((r) => ({
-    startDate: r.start_date,
-    endDate: r.end_date,
-    status: r.status,
-  }));
-  const access = getEffectiveAccess(tenant, periods, now);
+  const { rows, access, today } = await subscriptionState(c, now, tenant);
   if (access.state !== "grace" && access.state !== "read_only_expired") {
     return undefined;
   }
-  const today = localDate(now, tenant.timeZone);
-  return res.rows.find((r) => r.end_date < today);
+  return rows.find((r) => r.end_date < today);
 }
 
 const subscriptionExpiryNotice: TenantJob = {
@@ -166,9 +105,10 @@ const retentionDaily: PlatformJob = {
 
 /** Registry order is execution order. */
 export const JOB_DEFINITIONS: readonly JobDefinition[] = [
+  subscriptionExpiryNotice,
+  renewalReminder,
   outboxTenant,
   outboxPlatform,
-  subscriptionExpiryNotice,
   retentionHourly,
   retentionDaily,
 ];

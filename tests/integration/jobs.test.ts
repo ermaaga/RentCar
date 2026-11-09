@@ -2,6 +2,7 @@ import pg from "pg";
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 
+import { getTranslator } from "../../src/i18n";
 import { runDueJobs, type RunOptions } from "../../src/modules/jobs";
 import type { JobDefinition, JobEvent } from "../../src/modules/jobs/infrastructure/definitions";
 import { withTenantTx } from "../../src/platform/db/tenant-tx";
@@ -215,5 +216,47 @@ describe.skipIf(!adminUrl || !appUrl)("retention jobs", () => {
     });
     expect(deleted).toBe(0);
     expect((await runsFor(t.id)).length).toBe(1);
+  });
+});
+
+describe.skipIf(!adminUrl || !appUrl)("subscription_renewal_reminder (US-017)", () => {
+  it("queues one owner and one admin reminder per end date, then sends them", async () => {
+    const t = await tenantWithSubscription("2001-03-10");
+    await admin.query(
+      `INSERT INTO users (id, tenant_id, role, username, display_name, email)
+       VALUES ($1, $2, 'admin', 'boss', 'Boss', 'boss@example.test')`,
+      [randomUUID(), t.id],
+    );
+    const sent: string[] = [];
+    const mail = {
+      ownerEmail: "owner@example.test",
+      t: getTranslator(),
+      fieldKeys: [Buffer.alloc(32, 2)],
+      mailer: {
+        sendSystem: (m: { to: string; subject: string }) => {
+          sent.push(`${m.to}|${m.subject}`);
+          return Promise.resolve({ ok: true as const });
+        },
+        sendTenant: () => Promise.resolve({ ok: true as const }),
+      },
+    };
+    const now = new Date("2001-03-01T10:00:00Z");
+    const jobs = ["subscription_renewal_reminder", "email_outbox_dispatch"] as const;
+    const first = await runDueJobs(app, options(now, { jobs, tenantSlug: t.slug, mail }));
+    expect(first.counts.failed).toBe(0);
+    expect(sent.sort()).toEqual([
+      "boss@example.test|Your RentCar subscription ends on 2001-03-10",
+      `owner@example.test|Subscription of Jobs ends on 2001-03-10`,
+    ]);
+    const later = new Date("2001-03-05T10:00:00Z");
+    await runDueJobs(app, options(later, { jobs, tenantSlug: t.slug, mail }));
+    expect(sent).toHaveLength(2);
+  });
+
+  it("sends nothing while more than 14 days are left", async () => {
+    const t = await tenantWithSubscription("2001-12-31");
+    const only = { jobs: ["subscription_renewal_reminder"] as const, tenantSlug: t.slug };
+    const result = await runDueJobs(app, options(new Date("2001-03-01T10:00:00Z"), only));
+    expect(result.counts.succeeded).toBe(0);
   });
 });
