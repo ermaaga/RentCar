@@ -38,6 +38,16 @@ export const en = {
       invalid: "This link is not valid. Ask for a new one.",
     },
     logout: "Sign out",
+    account: {
+      link: "Account",
+      title: "Account",
+      changeTitle: "Change password",
+      current: "Current password",
+      currentInvalid: "The current password is not correct.",
+      submit: "Change password",
+      pending: "Saving…",
+      changed: "Password changed. Other devices were signed out.",
+    },
     forgot: {
       link: "Forgot your password?",
       title: "Reset your password",

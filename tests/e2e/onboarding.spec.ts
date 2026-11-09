@@ -94,7 +94,19 @@ test("owner creates a tenant and its admin activates the account", async ({ page
   await expect(page.getByRole("main").getByRole("alert")).toContainText("already been used");
 
   await resetAdminPassword(page, slug, email);
+  await changeAdminPassword(page);
 });
+
+async function changeAdminPassword(page: Page): Promise<void> {
+  await page.getByRole("link", { name: "Account" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Account" })).toBeVisible();
+  await expectAccessible(page);
+  await page.getByLabel("Current password").fill(NEW_ADMIN_PASSWORD);
+  await page.getByLabel("New password", { exact: true }).fill(ADMIN_PASSWORD);
+  await page.getByLabel("Repeat the new password").fill(ADMIN_PASSWORD);
+  await page.getByRole("button", { name: "Change password" }).click();
+  await expect(page.getByRole("main").getByRole("status")).toContainText("Password changed");
+}
 
 async function resetAdminPassword(page: Page, slug: string, email: string): Promise<void> {
   await page.goto(`/${slug}/admin/login`);
