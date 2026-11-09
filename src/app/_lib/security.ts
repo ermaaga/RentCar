@@ -9,7 +9,7 @@ import { recordSecurityEvent, type SecurityEventInput } from "@/platform/securit
 // limits keyed by it or by another identity, and security events that carry the IP as a prefix + HMAC.
 
 export async function requestIp(): Promise<string> {
-  return clientIp(await headers());
+  return clientIp(await headers(), getContainer().trustedProxyCount);
 }
 
 /**

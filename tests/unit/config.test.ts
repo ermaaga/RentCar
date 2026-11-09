@@ -62,6 +62,12 @@ describe("loadConfig", () => {
     expect(err.message).not.toContain(placeholder);
   });
 
+  it("requires an explicit trusted proxy count in production (SR-RL-02, SR-CFG-02)", () => {
+    const prod = { ...localEnv, APP_ENV: "production", APP_BASE_URL: "https://example.test" };
+    expect(captureError(() => loadConfig(prod)).message).toContain("TRUSTED_PROXY_COUNT");
+    expect(loadConfig({ ...prod, TRUSTED_PROXY_COUNT: "1" }).TRUSTED_PROXY_COUNT).toBe(1);
+  });
+
   it("requires https in staging", () => {
     const err = captureError(() =>
       loadConfig({ ...localEnv, APP_ENV: "staging", APP_BASE_URL: "http://staging.test" }),

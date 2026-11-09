@@ -6,7 +6,12 @@ export default defineConfig({
   // Same alias as tsconfig.json, so route handlers can be tested directly.
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   test: {
-    include: ["tests/unit/**/*.test.ts", "tests/integration/**/*.test.ts", "src/**/*.test.ts"],
+    include: [
+      "tests/unit/**/*.test.ts",
+      "tests/integration/**/*.test.ts",
+      "tests/security/**/*.test.ts",
+      "src/**/*.test.ts",
+    ],
     environment: "node",
     coverage: {
       provider: "v8",
