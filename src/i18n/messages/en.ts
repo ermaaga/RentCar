@@ -38,6 +38,16 @@ export const en = {
       invalid: "This link is not valid. Ask for a new one.",
     },
     logout: "Sign out",
+    forgot: {
+      link: "Forgot your password?",
+      title: "Reset your password",
+      intro: "Enter your username or email. If it matches an account, we send a reset link.",
+      identifier: "Username or email",
+      submit: "Send reset link",
+      pending: "Sending…",
+      done: "If an account matches, we sent a link. It expires in 60 minutes.",
+      back: "Back to sign in",
+    },
   },
   system: {
     nav: { tenants: "Tenants", newTenant: "New tenant" },

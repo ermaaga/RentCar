@@ -6,3 +6,4 @@ export {
   peekCredentialLink,
   redeemCredentialLink,
 } from "./infrastructure/credential-links";
+export { issuePasswordResets } from "./infrastructure/password-reset";

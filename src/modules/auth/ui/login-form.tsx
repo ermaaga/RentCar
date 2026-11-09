@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState } from "react";
 
 import { getTranslator } from "../../../i18n";
@@ -8,7 +9,8 @@ import { Field } from "../../../ui/field";
 import { SubmitButton } from "../../../ui/submit-button";
 import { IDLE, type AuthAction } from "./form-state";
 
-export function LoginForm({ action, notice }: { action: AuthAction; notice?: boolean }) {
+export function LoginForm(props: { action: AuthAction; forgotHref: string; notice?: boolean }) {
+  const { action, notice } = props;
   const t = getTranslator();
   const [state, formAction] = useActionState(action, IDLE);
   return (
@@ -32,6 +34,9 @@ export function LoginForm({ action, notice }: { action: AuthAction; notice?: boo
         required
       />
       <SubmitButton label={t("auth.login.submit")} pendingLabel={t("auth.login.pending")} />
+      <Link href={props.forgotHref} className="underline underline-offset-4">
+        {t("auth.forgot.link")}
+      </Link>
     </form>
   );
 }
