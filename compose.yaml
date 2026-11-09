@@ -99,5 +99,25 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  # Local trigger for the scheduled jobs (ADR-0007): one POST to /api/jobs/run at start, then hourly.
+  jobs:
+    <<: *app-image
+    command:
+      - node
+      - -e
+      - >-
+        const run = () => fetch(process.env.JOBS_URL, { method: 'POST',
+        headers: { authorization: 'Bearer ' + process.env.CRON_SECRET } })
+        .then((r) => console.log('jobs run: HTTP ' + r.status))
+        .catch((e) => console.error('jobs run failed: ' + e.message));
+        run(); setInterval(run, 3600000);
+    environment:
+      JOBS_URL: http://app:3000/api/jobs/run
+      CRON_SECRET: ${CRON_SECRET:-INSECURE_DEV_cron_secret_change_me_32chars_min}
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   pgdata:

@@ -41,6 +41,19 @@ export async function hitRateLimit(
   };
 }
 
+/** True when the identity already used up the current window (reads only, counts nothing). */
+export async function isRateLimited(
+  pool: pg.Pool,
+  input: { hmacKey: Buffer; rule: RateLimitRule; identity: string; now: Date },
+): Promise<boolean> {
+  const { rule } = input;
+  const res = await pool.query<{ count: number }>(
+    "SELECT count FROM rate_limit_buckets WHERE key = $1 AND window_start = $2",
+    [hmacHex(input.hmacKey, `${rule.scope}:${input.identity}`), windowOf(input.now, rule.windowMs)],
+  );
+  return (res.rows[0]?.count ?? 0) >= rule.limit;
+}
+
 const HOUR = 3_600_000;
 
 /** Named limits used by the entry points (06-backend-api 3.9). */
@@ -49,4 +62,5 @@ export const RATE_LIMITS = {
   resetIp: { scope: "auth.reset.ip", limit: 10, windowMs: HOUR },
   setPasswordIp: { scope: "auth.setpassword_failure.ip", limit: 10, windowMs: HOUR },
   loginIp: { scope: "auth.login_failure.ip", limit: 20, windowMs: 15 * 60_000 },
+  jobAuthFailureIp: { scope: "job.auth_failure.ip", limit: 10, windowMs: 60_000 },
 } as const satisfies Record<string, RateLimitRule>;
