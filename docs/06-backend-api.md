@@ -796,6 +796,7 @@ Pipeline in `FLT-07` / `BRD-02` (pure orchestration in `fleet`/`branding`, `shar
 | `ssrf.blocked` | `guardedSmtpTarget` | category |
 | `upload.rejected` | FLT-07, BRD-02 | reason |
 | `job.auth_failed`, `job.run` | JOB-01 | |
+| *Implemented in M1* | entry points via `src/app/_lib/security.ts`, recorder `src/platform/security-events/recorder.ts` | login, logout, password change, token issued/redeemed/rejected, `ratelimit.exceeded`, `job.auth_failed`. A tenant sign-in on a suspended tenant records `auth.login.success` then `auth.login.failure` (`tenant_unavailable`), because the status is checked after the password (the answer must not reveal the status to a wrong password). `access.denied`, `csrf.rejected`, `system.context.used` and the others follow with their entry points |
 | `crypto.decrypt_failed` | Encryptor | kid only |
 | `system.context.used` | `withSystemTx` | scope + purpose |
 | `export.created` | exports | type |

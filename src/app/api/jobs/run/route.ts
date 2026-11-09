@@ -8,6 +8,7 @@ import { bearerMatches } from "@/platform/crypto/bearer";
 import { clientIp } from "@/platform/host/client-ip";
 import { createLogger } from "@/platform/logging";
 import { hitRateLimit, isRateLimited, RATE_LIMITS } from "@/platform/rate-limit/postgres";
+import { recordSecurityEvent } from "@/platform/security-events/recorder";
 
 // JOB-01 (docs/06-backend-api.md 8.1, ADR-0007): GET for Vercel Cron, POST for the Compose sidecar
 // and the GitHub cron. Bearer CRON_SECRET only; every refusal is the same 401. Counts only in the
@@ -23,23 +24,30 @@ function unauthorized(): NextResponse {
   return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401, headers: NO_STORE });
 }
 
+async function refuse(ip: string, reasonCode: "rate_limited" | "bad_secret", now: Date) {
+  const c = getContainer();
+  logger.warn({ event: "job.auth_failed", reason: reasonCode }, "jobs call refused");
+  await recordSecurityEvent(
+    c.pool,
+    c.hmacKey,
+    { event: "job.auth_failed", realm: "job", outcome: "refused", reasonCode, ip },
+    now,
+  );
+}
+
 async function authorized(req: NextRequest, now: Date): Promise<boolean> {
   const c = getContainer();
-  const limit = {
-    hmacKey: c.hmacKey,
-    rule: RATE_LIMITS.jobAuthFailureIp,
-    identity: clientIp(req.headers),
-    now,
-  };
+  const ip = clientIp(req.headers);
+  const limit = { hmacKey: c.hmacKey, rule: RATE_LIMITS.jobAuthFailureIp, identity: ip, now };
   if (await isRateLimited(c.pool, limit)) {
-    logger.warn({ event: "job.auth_failed", reason: "rate_limited" }, "jobs call refused");
+    await refuse(ip, "rate_limited", now);
     return false;
   }
   if (bearerMatches(req.headers.get("authorization"), c.cronSecret)) {
     return true;
   }
   await hitRateLimit(c.pool, limit);
-  logger.warn({ event: "job.auth_failed", reason: "bad_secret" }, "jobs call refused");
+  await refuse(ip, "bad_secret", now);
   return false;
 }
 

@@ -82,7 +82,10 @@ describe.skipIf(!adminUrl || !appUrl)("login", () => {
   it("refuses a wrong password", async () => {
     const f = await seed();
     try {
-      expect(await tryLogin(f, "operator1", "wrong password here")).toEqual({ status: "invalid" });
+      expect(await tryLogin(f, "operator1", "wrong password here")).toEqual({
+        status: "invalid",
+        reason: "bad_password",
+      });
     } finally {
       await cleanup(f);
     }
@@ -91,7 +94,10 @@ describe.skipIf(!adminUrl || !appUrl)("login", () => {
   it("refuses an unknown user with the same answer", async () => {
     const f = await seed();
     try {
-      expect(await tryLogin(f, "nobody1", PASSWORD)).toEqual({ status: "invalid" });
+      expect(await tryLogin(f, "nobody1", PASSWORD)).toEqual({
+        status: "invalid",
+        reason: "unknown_user",
+      });
     } finally {
       await cleanup(f);
     }
@@ -174,6 +180,7 @@ describe.skipIf(!adminUrl || !appUrl)("login lockout", () => {
       for (let i = 0; i < 5; i += 1) {
         expect(await tryLogin(f, "operator1", "wrong password here")).toEqual({
           status: "invalid",
+          reason: "bad_password",
         });
       }
       const blocked = await tryLogin(f, "operator1", PASSWORD);
@@ -191,7 +198,7 @@ describe.skipIf(!adminUrl || !appUrl)("login lockout", () => {
         await tryLogin(f, "operator1", "wrong password here");
       }
       const other = await tryLogin(f, "nobody1", PASSWORD);
-      expect(other).toEqual({ status: "invalid" });
+      expect(other).toEqual({ status: "invalid", reason: "unknown_user" });
     } finally {
       await cleanup(f);
     }

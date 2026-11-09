@@ -17,9 +17,11 @@ export interface LoginInput {
   now: Date;
 }
 
+type LoginFailure = "unknown_user" | "not_active" | "bad_password";
+
 export type LoginResult =
   | { status: "ok"; token: string; userId: string; absoluteExpiresAt: Date }
-  | { status: "invalid" }
+  | { status: "invalid"; reason: LoginFailure }
   | { status: "throttled"; retryAfterSeconds: number };
 
 export interface ResolvedSession {
@@ -34,22 +36,38 @@ function getDummyHash(pepper: string): Promise<string> {
   return dummyHash;
 }
 
-async function findActiveUser(client: pg.PoolClient, input: LoginInput) {
-  const res = await client.query<{ id: string; password_hash: string | null }>(
-    `SELECT id, password_hash FROM users
-      WHERE tenant_id IS NOT DISTINCT FROM $1::uuid AND username = $2 AND status = 'active'
+/** The account of this realm with that username, whatever its status (the caller decides). */
+async function findUser(client: pg.PoolClient, input: LoginInput) {
+  const res = await client.query<{ id: string; password_hash: string | null; status: string }>(
+    `SELECT id, password_hash, status FROM users
+      WHERE tenant_id IS NOT DISTINCT FROM $1::uuid AND username = $2
         AND (role = 'systemadmin') = ($1::uuid IS NULL)`,
     [realmTenantId(input.realm), input.username],
   );
   return res.rows[0];
 }
 
-async function checkCredentials(pool: pg.Pool, input: LoginInput): Promise<{ id: string } | null> {
+/** The user id, or why the check failed (stored in security_event only; the answer stays generic). */
+async function checkCredentials(
+  pool: pg.Pool,
+  input: LoginInput,
+): Promise<{ id: string } | { failure: LoginFailure }> {
   return withRealmTx(pool, input.realm, async (client) => {
-    const user = await findActiveUser(client, input);
-    const storedHash = user?.password_hash ?? (await getDummyHash(input.peppers[0] ?? ""));
-    const ok = await verifyPassword(input.password, storedHash, input.peppers);
-    return user?.password_hash && ok ? { id: user.id } : null;
+    const user = await findUser(client, input);
+    const usable = user?.status === "active" && user.password_hash ? user.password_hash : null;
+    // Always one hash verification, so timing does not tell the three failures apart.
+    const ok = await verifyPassword(
+      input.password,
+      usable ?? (await getDummyHash(input.peppers[0] ?? "")),
+      input.peppers,
+    );
+    if (!user) {
+      return { failure: "unknown_user" };
+    }
+    if (!usable) {
+      return { failure: "not_active" };
+    }
+    return ok ? { id: user.id } : { failure: "bad_password" };
   });
 }
 
@@ -89,9 +107,9 @@ export async function login(pool: pg.Pool, input: LoginInput): Promise<LoginResu
     return { status: "throttled", retryAfterSeconds: retryAfterSeconds(input.now) };
   }
   const user = await checkCredentials(pool, input);
-  if (!user) {
+  if ("failure" in user) {
     await recordFailure(pool, key, input.now);
-    return { status: "invalid" };
+    return { status: "invalid", reason: user.failure };
   }
   const session = await withRealmTx(pool, input.realm, (client) =>
     insertSession(client, input.realm, user.id, input.now),

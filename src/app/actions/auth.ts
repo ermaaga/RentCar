@@ -16,6 +16,9 @@ import {
 import type { AuthFormState } from "@/modules/auth/ui/form-state";
 import { resolveTenantBySlug } from "@/modules/tenancy";
 import { sessionCookie, type CookieRealm } from "@/platform/http/session-cookie";
+import { RATE_LIMITS } from "@/platform/rate-limit/postgres";
+
+import { consume, limitReached, requestIp, securityEvent } from "@/app/_lib/security";
 
 // Thin auth entry points (docs/06-backend-api.md AUT-01..05): parse the form, call the service,
 // set or clear the realm cookie, redirect. Every refusal maps to one catalog key.
@@ -32,11 +35,38 @@ async function setSessionCookie(realm: CookieRealm, token: string): Promise<void
   (await cookies()).set(spec.name, token, spec.options);
 }
 
-async function signIn(
-  realm: Parameters<typeof login>[1]["realm"],
-  form: FormData,
-): Promise<AuthFormState | { status: "ok" }> {
+type AuthRealm = Parameters<typeof login>[1]["realm"];
+
+const THROTTLED: AuthFormState = { status: "error", messageKey: "auth.login.throttled" };
+
+function eventScope(realm: AuthRealm) {
+  return {
+    realm: realm.kind,
+    subjectTenantId: realm.kind === "tenant" ? realm.tenantId : null,
+  } as const;
+}
+
+type Outcome = "success" | "failure" | "refused";
+
+/** Emitter of security events bound to one realm and request IP. */
+function realmEvents(realm: AuthRealm, ip?: string) {
+  return (event: string, outcome: Outcome, extra: { reasonCode?: string; actorId?: string } = {}) =>
+    securityEvent({ event, outcome, ...eventScope(realm), ...extra }, ip);
+}
+
+/**
+ * AUT-01/02 with RL-04 (per account, inside `login`) and RL-05 (per IP: 20 failures / 15 min, system
+ * realm 10). Every outcome is a security event; the answer stays generic (SR-AUT-03).
+ */
+async function signIn(realm: AuthRealm, form: FormData): Promise<AuthFormState | { status: "ok" }> {
   const c = getContainer();
+  const ip = await requestIp();
+  const ipRule = realm.kind === "system" ? RATE_LIMITS.loginIpSystem : RATE_LIMITS.loginIp;
+  const emit = realmEvents(realm, ip);
+  if (await limitReached(ipRule, ip, realm.kind)) {
+    await emit("auth.login.throttled", "refused", { reasonCode: "ip" });
+    return THROTTLED;
+  }
   const result = await login(c.pool, {
     realm,
     username: field(form, "username").trim().toLowerCase(),
@@ -46,11 +76,15 @@ async function signIn(
     now: c.clock.now(),
   });
   if (result.status === "throttled") {
-    return { status: "error", messageKey: "auth.login.throttled" };
+    await emit("auth.login.throttled", "refused", { reasonCode: "account" });
+    return THROTTLED;
   }
   if (result.status === "invalid") {
+    await consume(ipRule, ip, realm.kind);
+    await emit("auth.login.failure", "failure", { reasonCode: result.reason });
     return { status: "error", messageKey: "auth.login.invalid" };
   }
+  await emit("auth.login.success", "success", { actorId: result.userId });
   await setSessionCookie(realm.kind, result.token);
   return { status: "ok" };
 }
@@ -77,7 +111,13 @@ export async function loginTenantAction(
     return outcome;
   }
   if (tenant.status !== "active") {
-    await clearSession("tenant", tenantRealm(tenant.tenantId));
+    await clearSession("tenant", tenantRealm(tenant.tenantId), false);
+    await securityEvent({
+      event: "auth.login.failure",
+      outcome: "refused",
+      reasonCode: "tenant_unavailable",
+      ...eventScope(tenantRealm(tenant.tenantId)),
+    });
     return { status: "error", messageKey: "auth.login.unavailable" };
   }
   redirect(`/${tenant.slug}/admin`);
@@ -97,6 +137,7 @@ function passwordProblem(password: string, confirm: string): AuthFormState | und
     : { status: "error", messageKey: "auth.setPassword.mismatch" };
 }
 
+/** AUT-05 with RL-08 (failed redemptions per IP: 10/h). */
 async function setPassword(
   realm: Parameters<typeof redeemCredentialLink>[1]["realm"],
   form: FormData,
@@ -107,6 +148,11 @@ async function setPassword(
     return problem;
   }
   const c = getContainer();
+  const ip = await requestIp();
+  const emit = realmEvents(realm, ip);
+  if (await limitReached(RATE_LIMITS.setPasswordIp, ip, realm.kind)) {
+    return { status: "error", messageKey: "auth.login.throttled" };
+  }
   const result = await redeemCredentialLink(c.pool, {
     realm,
     token: field(form, "token"),
@@ -115,8 +161,13 @@ async function setPassword(
     now: c.clock.now(),
   });
   if (result.status !== "ok") {
+    if (result.status === "invalid") {
+      await consume(RATE_LIMITS.setPasswordIp, ip, realm.kind);
+    }
+    await emit("auth.token.rejected", "failure", { reasonCode: result.status });
     return { status: "error", messageKey: "auth.setPassword.invalid" };
   }
+  await emit("auth.token.redeemed", "success", { reasonCode: result.purpose });
   if (result.sessionToken) {
     await setSessionCookie(realm.kind, result.sessionToken);
   }
@@ -151,12 +202,16 @@ export async function redeemTenantAction(
 async function clearSession(
   cookieRealm: CookieRealm,
   realm: Parameters<typeof revokeSession>[1]["realm"],
+  asLogout = true,
 ): Promise<void> {
   const jar = await cookies();
   const spec = sessionCookie(cookieRealm, getContainer().secureCookies);
   const token = jar.get(spec.name)?.value;
   if (token) {
     await revokeSession(getContainer().pool, { realm, token });
+    if (asLogout) {
+      await securityEvent({ event: "auth.logout", outcome: "success", ...eventScope(realm) });
+    }
   }
   jar.delete({ name: spec.name, path: "/" });
 }
@@ -196,6 +251,11 @@ async function rotatePassword(
     now: c.clock.now(),
   });
   if (result.status === "ok") {
+    await securityEvent({
+      event: "auth.password.changed",
+      outcome: "success",
+      ...eventScope(realm),
+    });
     await setSessionCookie(cookieRealm, result.sessionToken);
     return { status: "done", messageKey: "auth.account.changed" };
   }

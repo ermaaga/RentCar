@@ -127,5 +127,10 @@ describe.skipIf(!appUrl || !adminUrl)("/api/jobs/run failure limit (RL-13)", () 
       expect((await call("Bearer wrong")).status).toBe(401);
     }
     expect((await call(`Bearer ${SECRET}`)).status).toBe(401);
+    const events = await admin.query<{ reason_code: string }>(
+      `SELECT reason_code FROM security_event
+        WHERE event = 'job.auth_failed' AND ip_prefix = '203.0.113.0/24' AND created_at > now() - interval '1 minute'`,
+    );
+    expect(events.rows.map((r) => r.reason_code)).toContain("rate_limited");
   });
 });
