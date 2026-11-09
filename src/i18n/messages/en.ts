@@ -217,6 +217,11 @@ export const en = {
       deactivated: "Deactivated",
       activation_not_delivered: "Activation not delivered",
     },
+    edit: {
+      submit: "Save {name}",
+      saved: "Operator updated.",
+      emailNotice: "Operator updated. The previous email address was told about the change.",
+    },
     resend: "Re-send activation link",
     resent: "A new activation link was sent.",
     resendFailed: "The link couldn't be sent. Fix your email settings, then try again.",

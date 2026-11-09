@@ -5,6 +5,7 @@ import {
   createOperatorAction,
   reissueOperatorLinkAction,
   setOperatorActiveAction,
+  updateOperatorAction,
 } from "@/app/actions/operators";
 import { getContainer } from "@/composition/container";
 import { formatMessage, getTranslator } from "@/i18n";
@@ -13,8 +14,37 @@ import { AddOperatorForm } from "@/modules/auth/ui/add-operator-form";
 import { getSmtpSummary } from "@/modules/notifications";
 import { ConsoleActionForm } from "@/modules/tenancy/ui/console-action-form";
 import { Alert } from "@/ui/alert";
+import { Field } from "@/ui/field";
 
 export const dynamic = "force-dynamic";
+
+/** AUT-13 inline edit; field ids carry the operator id because the form repeats per row. */
+function EditOperator({ slug, op }: { slug: string; op: OperatorRow }) {
+  const t = getTranslator();
+  return (
+    <ConsoleActionForm
+      action={updateOperatorAction.bind(null, slug, op.id)}
+      submit="operators.edit.submit"
+      submitParams={{ name: op.displayName }}
+    >
+      <Field
+        id={`name-${op.id}`}
+        name="displayName"
+        label={t("operators.add.name")}
+        defaultValue={op.displayName}
+        required
+      />
+      <Field
+        id={`email-${op.id}`}
+        name="email"
+        type="email"
+        label={t("operators.add.email")}
+        defaultValue={op.email}
+        required
+      />
+    </ConsoleActionForm>
+  );
+}
 
 function OperatorActions(props: { slug: string; op: OperatorRow; readOnly: boolean }) {
   const { slug, op } = props;
@@ -25,6 +55,7 @@ function OperatorActions(props: { slug: string; op: OperatorRow; readOnly: boole
   const active = op.status !== "deactivated";
   return (
     <div className="flex flex-col gap-3">
+      <EditOperator slug={slug} op={op} />
       {canResend ? (
         <ConsoleActionForm
           action={reissueOperatorLinkAction.bind(null, slug, op.id)}

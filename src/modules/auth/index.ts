@@ -9,13 +9,15 @@ export {
 export { issuePasswordResets } from "./infrastructure/password-reset";
 export { issueAdminAccessLink } from "./infrastructure/admin-access";
 export { changePassword } from "./infrastructure/change-password";
-export { createOperatorInput } from "./application/operator-input";
+export { createOperatorInput, updateOperatorInput } from "./application/operator-input";
 export {
   createOperator,
-  listOperators,
   operatorUsage,
   recordCredentialDelivery,
   reissueOperatorLink,
   setOperatorActive,
+  updateOperator,
 } from "./infrastructure/operators";
-export type { IssuedOperatorLink, OperatorRow } from "./infrastructure/operators";
+export type { IssuedOperatorLink } from "./infrastructure/operators";
+export { listOperators } from "./infrastructure/operator-list";
+export type { OperatorRow } from "./infrastructure/operator-list";

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { tenantActivationMail } from "@/app/_lib/credential-mail";
+import { dispatchAfterResponse } from "@/app/_lib/outbox";
 import { consume, securityEvent, tokenIssued } from "@/app/_lib/security";
 import { requireTenantAdmin, tenantWriteRefusal } from "@/app/_lib/session";
 import { getContainer } from "@/composition/container";
@@ -13,6 +14,8 @@ import {
   recordCredentialDelivery,
   reissueOperatorLink,
   setOperatorActive,
+  updateOperator,
+  updateOperatorInput,
   type IssuedOperatorLink,
 } from "@/modules/auth";
 import type { OperatorFormState } from "@/modules/auth/ui/add-operator-form";
@@ -52,6 +55,14 @@ async function deliver(slug: string, tenantId: string, link: IssuedOperatorLink)
   return sent.ok;
 }
 
+/** Reads string form fields, bounded (non-strings read as empty). */
+function formText(form: FormData): (key: string) => string {
+  return (key) => {
+    const v = form.get(key);
+    return typeof v === "string" ? v.slice(0, 254) : "";
+  };
+}
+
 const CREATE_ERRORS = {
   USERNAME_TAKEN: err("operators.add.usernameTaken", ["username"]),
   PLAN_LIMIT_REACHED: err("operators.add.limitReached"),
@@ -60,10 +71,7 @@ const CREATE_ERRORS = {
 export async function createOperatorAction(slug: string, _: State, form: FormData): Promise<State> {
   const { tenant, session, refusal } = await guard(slug);
   if (refusal) return err(refusal);
-  const text = (k: string) => {
-    const v = form.get(k);
-    return typeof v === "string" ? v.slice(0, 254) : "";
-  };
+  const text = formText(form);
   const parsed = createOperatorInput.safeParse({
     displayName: text("displayName"),
     username: text("username"),
@@ -158,4 +166,34 @@ export async function reissueOperatorLinkAction(
   const sent = await deliver(tenant.slug, tenant.tenantId, issued.link);
   revalidatePath(`/${tenant.slug}/admin/operators`);
   return sent ? { status: "done", messageKey: "operators.resent" } : err("operators.resendFailed");
+}
+
+export async function updateOperatorAction(
+  slug: string,
+  id: string,
+  _: ConsoleActionState,
+  form: FormData,
+): Promise<ConsoleActionState> {
+  const { tenant, refusal } = await guard(slug);
+  if (refusal) return err(refusal);
+  const text = formText(form);
+  const parsed = updateOperatorInput.safeParse({
+    displayName: text("displayName"),
+    email: text("email").trim(),
+  });
+  if (!parsed.success) return err("operators.add.invalid");
+  const c = getContainer();
+  const result = await updateOperator(
+    c.pool,
+    { id, ...parsed.data },
+    {
+      tenantId: tenant.tenantId,
+      now: c.clock.now(),
+    },
+  );
+  revalidatePath(`/${tenant.slug}/admin/operators`);
+  if (!result.ok) return err("operators.notFound");
+  if (!result.emailChanged) return { status: "done", messageKey: "operators.edit.saved" };
+  dispatchAfterResponse({ kind: "tenant", tenantId: tenant.tenantId });
+  return { status: "done", messageKey: "operators.edit.emailNotice" };
 }
