@@ -68,7 +68,20 @@ describe("loadConfig", () => {
     );
     expect(err.message).toContain("APP_BASE_URL");
   });
+});
 
+describe("loadConfig: system SMTP", () => {
+  it("allows the Mailpit override only locally, and plaintext SMTP only with it", () => {
+    const mailpit = { SYSTEM_SMTP_SECURITY: "none", SMTP_DEV_ALLOW_PRIVATE: "true" };
+    expect(loadConfig({ ...localEnv, ...mailpit }).SMTP_DEV_ALLOW_PRIVATE).toBe(true);
+    const ci = captureError(() => loadConfig({ ...localEnv, ...mailpit, APP_ENV: "ci" }));
+    expect(ci.message).toContain("SMTP_DEV_ALLOW_PRIVATE");
+    const plain = captureError(() => loadConfig({ ...localEnv, SYSTEM_SMTP_SECURITY: "none" }));
+    expect(plain.message).toContain("SYSTEM_SMTP_SECURITY");
+  });
+});
+
+describe("loadConfig: environments", () => {
   it("rejects unknown environments", () => {
     expect(() => configSchema.parse({ ...localEnv, APP_ENV: "development" })).toThrow();
   });

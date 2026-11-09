@@ -1,0 +1,71 @@
+import type { MessageKey } from "../../../i18n";
+
+// Credential email (docs/06-backend-api.md 9.2 `credential.activation` / `credential.reset`): only
+// the link, its expiry and an "ignore if not you" line (SR-EML-04). The translator is passed in.
+
+export interface CredentialEmailInput {
+  purpose: "activation" | "password_reset";
+  to: string;
+  displayName: string;
+  username: string;
+  link: string;
+}
+
+export interface RenderedEmail {
+  to: string;
+  subject: string;
+  text: string;
+  html: string;
+}
+
+type Translate = (key: MessageKey) => string;
+
+const ESCAPES: Record<string, string> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+};
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (c) => ESCAPES[c] ?? c);
+}
+
+function fill(template: string, vars: Record<string, string>): string {
+  return template.replace(/\{(\w+)\}/g, (match, name: string) => vars[name] ?? match);
+}
+
+const KEYS = {
+  activation: {
+    subject: "email.credential.activation.subject",
+    intro: "email.credential.activation.intro",
+    action: "email.credential.activation.action",
+  },
+  password_reset: {
+    subject: "email.credential.reset.subject",
+    intro: "email.credential.reset.intro",
+    action: "email.credential.reset.action",
+  },
+} as const satisfies Record<CredentialEmailInput["purpose"], Record<string, MessageKey>>;
+
+export function renderCredentialEmail(input: CredentialEmailInput, t: Translate): RenderedEmail {
+  const keys = KEYS[input.purpose];
+  const intro = t(keys.intro);
+  const action = t(keys.action);
+  const ignore = t("email.credential.ignore");
+  const textVars = { name: input.displayName, username: input.username };
+  const htmlVars = { name: escapeHtml(input.displayName), username: escapeHtml(input.username) };
+  const link = escapeHtml(input.link);
+  return {
+    to: input.to,
+    subject: t(keys.subject),
+    text: [fill(intro, textVars), "", action, input.link, "", ignore].join("\n"),
+    html: [
+      `<p>${fill(escapeHtml(intro), htmlVars)}</p>`,
+      `<p>${escapeHtml(action)}</p>`,
+      `<p><a href="${link}">${link}</a></p>`,
+      `<p>${escapeHtml(ignore)}</p>`,
+    ].join("\n"),
+  };
+}
