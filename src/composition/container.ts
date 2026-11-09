@@ -19,6 +19,8 @@ export interface Container {
   hmacKey: Buffer;
   baseUrl: string;
   secureCookies: boolean;
+  cronSecret: string;
+  jobsBudgetMs: number;
 }
 
 let container: Container | undefined;
@@ -45,6 +47,8 @@ function build(): Container {
     hmacKey: deriveKey(cfg.APP_ENCRYPTION_KEY, "ratelimit"),
     baseUrl: cfg.APP_BASE_URL.replace(/\/$/, ""),
     secureCookies: cookiesMustBeSecure(cfg.APP_ENV, cfg.APP_BASE_URL),
+    cronSecret: cfg.CRON_SECRET,
+    jobsBudgetMs: cfg.JOBS_TIME_BUDGET_MS,
   };
 }
 

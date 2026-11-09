@@ -24,6 +24,8 @@ export const configSchema = z
     SYSTEM_SMTP_FROM_ADDRESS: z.email().optional(),
     SYSTEM_SMTP_FROM_NAME: z.string().max(80).default("RentCar"),
     SYSTEM_ADMIN_EMAIL: z.email().optional(),
+    // Time budget of one /api/jobs/run call; leftover work is picked up by the next call (8.1).
+    JOBS_TIME_BUDGET_MS: z.coerce.number().int().min(1000).max(60000).default(8000),
     // Mailpit in development only: allows a private host and plaintext SMTP. Boot fails elsewhere.
     SMTP_DEV_ALLOW_PRIVATE: z
       .enum(["true", "false"])
