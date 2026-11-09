@@ -50,22 +50,33 @@ async function checkCredentials(pool: pg.Pool, input: LoginInput): Promise<{ id:
   });
 }
 
+/** Inserts a tenant session in the caller's transaction; returns the plaintext token once. */
+export async function insertSession(
+  client: pg.ClientBase,
+  tenantId: string,
+  userId: string,
+  now: Date,
+): Promise<{ token: string; absoluteExpiresAt: Date }> {
+  const token = generateToken();
+  const window = newSessionWindow(now);
+  await client.query(
+    `INSERT INTO sessions (id, tenant_id, realm, user_id, token_hash, idle_expires_at, absolute_expires_at)
+     VALUES (gen_random_uuid(), $1, 'tenant', $2, $3, $4, $5)`,
+    [tenantId, userId, hashToken(token), window.idleExpiresAt, window.absoluteExpiresAt],
+  );
+  await client.query("UPDATE users SET last_login_at = $2 WHERE id = $1", [userId, now]);
+  return { token, absoluteExpiresAt: window.absoluteExpiresAt };
+}
+
 async function openSessionRow(
   pool: pg.Pool,
   input: LoginInput,
   userId: string,
 ): Promise<LoginResult> {
-  const token = generateToken();
-  const window = newSessionWindow(input.now);
-  await withTenantTx(pool, input.tenantId, async (client) => {
-    await client.query(
-      `INSERT INTO sessions (id, tenant_id, realm, user_id, token_hash, idle_expires_at, absolute_expires_at)
-       VALUES (gen_random_uuid(), $1, 'tenant', $2, $3, $4, $5)`,
-      [input.tenantId, userId, hashToken(token), window.idleExpiresAt, window.absoluteExpiresAt],
-    );
-    await client.query("UPDATE users SET last_login_at = $2 WHERE id = $1", [userId, input.now]);
-  });
-  return { status: "ok", token, userId, absoluteExpiresAt: window.absoluteExpiresAt };
+  const session = await withTenantTx(pool, input.tenantId, (client) =>
+    insertSession(client, input.tenantId, userId, input.now),
+  );
+  return { status: "ok", userId, ...session };
 }
 
 /**
