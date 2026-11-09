@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import { requireTenantAdmin, tenantWriteRefusal } from "@/app/_lib/session";
+import { tenantAction } from "@/app/_lib/define-action";
 import { consume } from "@/app/_lib/security";
 import { getContainer } from "@/composition/container";
 import { getTranslator, type MessageKey } from "@/i18n";
@@ -45,62 +45,64 @@ function readForm(form: FormData): Record<string, unknown> {
   };
 }
 
-export async function saveSmtpAction(
-  slug: string,
-  _: SmtpFormState,
-  form: FormData,
-): Promise<SmtpFormState> {
-  const { tenant, session } = await requireTenantAdmin(slug);
-  const refusal = await tenantWriteRefusal(tenant);
-  if (refusal) {
-    return { status: "error", messageKey: refusal };
-  }
-  const parsed = smtpSettingsInput.safeParse(readForm(form));
-  if (!parsed.success) {
-    const fields = parsed.error.issues.map((i) => i.path.join("."));
-    return { status: "error", messageKey: "settings.email.invalid", fields };
-  }
-  const c = getContainer();
-  const result = await updateSmtpSettings(deps(), parsed.data, {
-    tenantId: tenant.tenantId,
-    userId: session.userId,
-    now: c.clock.now(),
-  });
-  revalidatePath(`/${tenant.slug}/admin/settings/email`);
-  if (result.ok) {
-    return { status: "done", messageKey: "settings.email.saved" };
-  }
-  if (result.code === "PASSWORD_REQUIRED") {
-    return { status: "error", messageKey: "settings.email.passwordRequired", fields: ["password"] };
-  }
-  return { status: "error", messageKey: failureKey(result.category), fields: ["host"] };
-}
+const ADMIN_WRITE = {
+  minRole: "admin",
+  writeClass: "write",
+  onRefused: (messageKey: MessageKey): SmtpFormState => ({ status: "error", messageKey }),
+} as const;
 
-export async function testSmtpAction(slug: string): Promise<SmtpFormState> {
-  const { tenant, session } = await requireTenantAdmin(slug);
-  const refusal = await tenantWriteRefusal(tenant);
-  if (refusal) {
-    return { status: "error", messageKey: refusal };
-  }
-  // RL-10: 5 test emails per tenant per hour.
-  if (!(await consume(RATE_LIMITS.smtpTest, tenant.tenantId, "tenant"))) {
-    return { status: "error", messageKey: "settings.email.testThrottled" };
-  }
-  const c = getContainer();
-  const result = await testSmtpSettings(
-    deps(),
-    { tenantId: tenant.tenantId, userId: session.userId, now: c.clock.now() },
-    getTranslator(),
-  );
-  revalidatePath(`/${tenant.slug}/admin/settings/email`);
-  if (result.ok) {
-    return { status: "done", messageKey: "settings.email.testSent" };
-  }
-  return {
-    status: "error",
-    messageKey:
-      result.code === "SMTP_NOT_CONFIGURED"
-        ? "settings.email.notConfigured"
-        : failureKey(result.category),
-  };
-}
+export const saveSmtpAction = tenantAction(
+  ADMIN_WRITE,
+  async ({ tenant, session }, _: SmtpFormState, form: FormData): Promise<SmtpFormState> => {
+    const parsed = smtpSettingsInput.safeParse(readForm(form));
+    if (!parsed.success) {
+      const fields = parsed.error.issues.map((i) => i.path.join("."));
+      return { status: "error", messageKey: "settings.email.invalid", fields };
+    }
+    const c = getContainer();
+    const result = await updateSmtpSettings(deps(), parsed.data, {
+      tenantId: tenant.tenantId,
+      userId: session.userId,
+      now: c.clock.now(),
+    });
+    revalidatePath(`/${tenant.slug}/admin/settings/email`);
+    if (result.ok) {
+      return { status: "done", messageKey: "settings.email.saved" };
+    }
+    if (result.code === "PASSWORD_REQUIRED") {
+      return {
+        status: "error",
+        messageKey: "settings.email.passwordRequired",
+        fields: ["password"],
+      };
+    }
+    return { status: "error", messageKey: failureKey(result.category), fields: ["host"] };
+  },
+);
+
+export const testSmtpAction = tenantAction(
+  ADMIN_WRITE,
+  async ({ tenant, session }): Promise<SmtpFormState> => {
+    // RL-10: 5 test emails per tenant per hour.
+    if (!(await consume(RATE_LIMITS.smtpTest, tenant.tenantId, "tenant"))) {
+      return { status: "error", messageKey: "settings.email.testThrottled" };
+    }
+    const c = getContainer();
+    const result = await testSmtpSettings(
+      deps(),
+      { tenantId: tenant.tenantId, userId: session.userId, now: c.clock.now() },
+      getTranslator(),
+    );
+    revalidatePath(`/${tenant.slug}/admin/settings/email`);
+    if (result.ok) {
+      return { status: "done", messageKey: "settings.email.testSent" };
+    }
+    return {
+      status: "error",
+      messageKey:
+        result.code === "SMTP_NOT_CONFIGURED"
+          ? "settings.email.notConfigured"
+          : failureKey(result.category),
+    };
+  },
+);

@@ -113,9 +113,9 @@ const INVOKERS: Record<string, (a: Tenant) => unknown[]> = {
   "action:actions/tenancy#createTenantAction": () => [idle, form({ name: "x" })],
   "action:actions/tenancy#setTenantStatusAction": (a) => [a.slug, "suspended"],
   "action:actions/tenancy#renewSubscriptionAction": (a) => [
-    a.slug,
+    { slug: a.slug, subscriptionId: randomUUID() },
     idle,
-    form({ subscriptionId: randomUUID(), endDate: "2099-01-01" }),
+    form({ endDate: "2099-01-01" }),
   ],
   "action:actions/tenancy#adminAccessLinkAction": (a) => [a.slug],
 };

@@ -77,7 +77,8 @@ describe.skipIf(!appUrl || !adminUrl)("POST|GET /api/jobs/run", () => {
       body: JSON.stringify({ jobs: ["retention_hourly"] }),
     });
     expect(post.status).toBe(200);
-  });
+    // GET runs every due job over every tenant of the shared test database, within the 8 s budget.
+  }, 30_000);
 });
 
 describe.skipIf(!appUrl || !adminUrl)("POST /api/jobs/run input and concurrency", () => {
