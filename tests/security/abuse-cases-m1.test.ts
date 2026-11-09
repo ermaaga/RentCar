@@ -132,9 +132,9 @@ export const M1_ABUSE_CASES: AbuseCase[] = [
   { id: "ABU-M1-27", status: "automated", evidence: [U("jobs")] },
   {
     id: "ABU-M1-28",
-    status: "pending",
-    evidence: [],
-    gap: "booking, customer, vehicle and expense tables arrive in M2-M4",
+    status: "partial",
+    evidence: [I("booking-exclusion")],
+    gap: "bookings, customers, vehicles and photos covered; expenses arrive in M4",
   },
   {
     id: "ABU-M1-29",
