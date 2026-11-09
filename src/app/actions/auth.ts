@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 
 import { getContainer } from "@/composition/container";
 import {
+  changePassword,
   checkPassword,
   login,
   redeemCredentialLink,
@@ -171,4 +172,57 @@ export async function logoutTenantAction(slug: string): Promise<void> {
     await clearSession("tenant", tenantRealm(tenant.tenantId));
   }
   redirect(`/${slug}/admin/login`);
+}
+
+async function rotatePassword(
+  cookieRealm: CookieRealm,
+  realm: Parameters<typeof changePassword>[1]["realm"],
+  form: FormData,
+): Promise<AuthFormState> {
+  const password = field(form, "password");
+  const problem = passwordProblem(password, field(form, "confirm"));
+  if (problem) {
+    return problem;
+  }
+  const c = getContainer();
+  const spec = sessionCookie(cookieRealm, c.secureCookies);
+  const result = await changePassword(c.pool, {
+    realm,
+    sessionToken: (await cookies()).get(spec.name)?.value ?? "",
+    currentPassword: field(form, "current"),
+    newPassword: password,
+    peppers: c.peppers,
+    hmacKey: c.hmacKey,
+    now: c.clock.now(),
+  });
+  if (result.status === "ok") {
+    await setSessionCookie(cookieRealm, result.sessionToken);
+    return { status: "done", messageKey: "auth.account.changed" };
+  }
+  if (result.status === "throttled") {
+    return { status: "error", messageKey: "auth.login.throttled" };
+  }
+  if (result.status === "policy_failed") {
+    return { status: "error", messageKey: "auth.setPassword.tooShort" };
+  }
+  return { status: "error", messageKey: "auth.account.currentInvalid" };
+}
+
+export async function changeSystemPasswordAction(
+  _: AuthFormState,
+  form: FormData,
+): Promise<AuthFormState> {
+  return rotatePassword("system", SYSTEM_REALM, form);
+}
+
+export async function changeTenantPasswordAction(
+  slug: string,
+  _: AuthFormState,
+  form: FormData,
+): Promise<AuthFormState> {
+  const tenant = await resolveTenantBySlug(getContainer().pool, slug);
+  if (!tenant) {
+    return { status: "error", messageKey: "auth.account.currentInvalid" };
+  }
+  return rotatePassword("tenant", tenantRealm(tenant.tenantId), form);
 }

@@ -4,8 +4,8 @@ import { useActionState, useEffect } from "react";
 
 import { getTranslator } from "../../../i18n";
 import { Alert } from "../../../ui/alert";
-import { Field } from "../../../ui/field";
 import { SubmitButton } from "../../../ui/submit-button";
+import { NewPasswordFields } from "./new-password-fields";
 import { IDLE, type AuthAction } from "./form-state";
 
 /**
@@ -27,21 +27,7 @@ export function SetPasswordForm(props: { action: AuthAction; token: string; user
       </p>
       <input type="hidden" name="token" value={props.token} />
       <input type="hidden" name="username" value={props.username} autoComplete="username" />
-      <Field
-        name="password"
-        type="password"
-        label={t("auth.setPassword.password")}
-        hint={t("auth.setPassword.hint")}
-        autoComplete="new-password"
-        required
-      />
-      <Field
-        name="confirm"
-        type="password"
-        label={t("auth.setPassword.confirm")}
-        autoComplete="new-password"
-        required
-      />
+      <NewPasswordFields />
       <SubmitButton
         label={t("auth.setPassword.submit")}
         pendingLabel={t("auth.setPassword.pending")}

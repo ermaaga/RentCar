@@ -23,7 +23,10 @@ export default async function ConsoleLayout({ children }: { children: ReactNode 
           <Link href="/system/tenants/new" className="underline-offset-4 hover:underline">
             {t("system.nav.newTenant")}
           </Link>
-          <form action={logoutSystemAction} className="ml-auto">
+          <Link href="/system/account" className="ml-auto underline-offset-4 hover:underline">
+            {t("auth.account.link")}
+          </Link>
+          <form action={logoutSystemAction}>
             <button type="submit" className="min-h-12 px-2 underline underline-offset-4">
               {t("auth.logout")}
             </button>
