@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { getContainer } from "@/composition/container";
 import { getTranslator, type MessageKey } from "@/i18n";
 import { listTenants, type TenantListRow } from "@/modules/tenancy";
@@ -35,7 +37,11 @@ function TenantTable({ rows }: { rows: readonly TenantListRow[] }) {
         <tbody>
           {rows.map((row) => (
             <tr key={row.slug} className="border-b border-border">
-              <td className="py-2 pr-4">{row.name}</td>
+              <td className="py-2 pr-4">
+                <Link href={`/system/tenants/${row.slug}`} className="underline underline-offset-4">
+                  {row.name}
+                </Link>
+              </td>
               <td className="py-2 pr-4">{row.slug}</td>
               <td className="py-2 pr-4">{label(row.status)}</td>
               <td className="py-2 pr-4">{label(row.adminStatus)}</td>

@@ -1,4 +1,4 @@
-import type { MessageKey } from "../../../i18n";
+import { formatMessage, type MessageKey } from "../../../i18n";
 
 // Credential email (docs/06-backend-api.md 9.2 `credential.activation` / `credential.reset`): only
 // the link, its expiry and an "ignore if not you" line (SR-EML-04). The translator is passed in.
@@ -32,10 +32,6 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (c) => ESCAPES[c] ?? c);
 }
 
-function fill(template: string, vars: Record<string, string>): string {
-  return template.replace(/\{(\w+)\}/g, (match, name: string) => vars[name] ?? match);
-}
-
 const KEYS = {
   activation: {
     subject: "email.credential.activation.subject",
@@ -60,9 +56,9 @@ export function renderCredentialEmail(input: CredentialEmailInput, t: Translate)
   return {
     to: input.to,
     subject: t(keys.subject),
-    text: [fill(intro, textVars), "", action, input.link, "", ignore].join("\n"),
+    text: [formatMessage(intro, textVars), "", action, input.link, "", ignore].join("\n"),
     html: [
-      `<p>${fill(escapeHtml(intro), htmlVars)}</p>`,
+      `<p>${formatMessage(escapeHtml(intro), htmlVars)}</p>`,
       `<p>${escapeHtml(action)}</p>`,
       `<p><a href="${link}">${link}</a></p>`,
       `<p>${escapeHtml(ignore)}</p>`,
