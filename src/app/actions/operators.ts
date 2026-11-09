@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { tenantActivationMail } from "@/app/_lib/credential-mail";
 import { dispatchAfterResponse } from "@/app/_lib/outbox";
 import { consume, securityEvent, tokenIssued } from "@/app/_lib/security";
-import { requireTenantAdmin, tenantWriteRefusal } from "@/app/_lib/session";
+import { tenantAction } from "@/app/_lib/define-action";
 import { getContainer } from "@/composition/container";
 import type { MessageKey } from "@/i18n";
 import {
@@ -35,11 +35,12 @@ function err(messageKey: MessageKey, fields?: readonly string[]) {
   return { status: "error" as const, messageKey, ...(fields ? { fields } : {}) };
 }
 
-async function guard(slug: string) {
-  const found = await requireTenantAdmin(slug);
-  const refusal = await tenantWriteRefusal(found.tenant);
-  return { ...found, refusal };
-}
+/** Admin only, refused while the tenant is read-only (06-backend-api 4.4). */
+const ADMIN_WRITE = {
+  minRole: "admin",
+  writeClass: "write",
+  onRefused: (key: MessageKey) => err(key),
+} as const;
 
 /** Emails the activation link through the tenant SMTP and records the delivery outcome. */
 async function deliver(slug: string, tenantId: string, link: IssuedOperatorLink): Promise<boolean> {
@@ -68,132 +69,136 @@ const CREATE_ERRORS = {
   PLAN_LIMIT_REACHED: err("operators.add.limitReached"),
 } as const;
 
-export async function createOperatorAction(slug: string, _: State, form: FormData): Promise<State> {
-  const { tenant, session, refusal } = await guard(slug);
-  if (refusal) return err(refusal);
-  const text = formText(form);
-  const parsed = createOperatorInput.safeParse({
-    displayName: text("displayName"),
-    username: text("username"),
-    email: text("email").trim(),
-  });
-  if (!parsed.success) {
-    return err(
-      "operators.add.invalid",
-      parsed.error.issues.map((i) => i.path.join(".")),
-    );
-  }
-  if (!(await consume(RATE_LIMITS.credentialIssued, `tenant:${tenant.slug}`, "tenant"))) {
-    return err("operators.throttled");
-  }
-  const c = getContainer();
-  const ctx = { tenantId: tenant.tenantId, actorUserId: session.userId, now: c.clock.now() };
-  const created = await createOperator(c.pool, parsed.data, ctx);
-  revalidatePath(`/${tenant.slug}/admin/operators`);
-  if (!created.ok) return CREATE_ERRORS[created.code];
-  await tokenIssued({
-    realm: "tenant",
-    reasonCode: "activation",
-    actorId: session.userId,
-    subjectTenantId: tenant.tenantId,
-  });
-  const sent = await deliver(tenant.slug, tenant.tenantId, created.link);
-  return sent ? { status: "done", messageKey: "operators.add.sent" } : err("operators.add.notSent");
-}
-
-export async function setOperatorActiveAction(
-  slug: string,
-  id: string,
-  active: boolean,
-): Promise<ConsoleActionState> {
-  const { tenant, session, refusal } = await guard(slug);
-  if (refusal) return err(refusal);
-  const c = getContainer();
-  const result = await setOperatorActive(
-    c.pool,
-    { id, active },
-    {
-      tenantId: tenant.tenantId,
-      now: c.clock.now(),
-    },
-  );
-  revalidatePath(`/${tenant.slug}/admin/operators`);
-  if (!result.ok) {
-    return err(result.code === "NOT_FOUND" ? "operators.notFound" : "operators.add.limitReached");
-  }
-  if (result.sessionsRevoked > 0) {
-    await securityEvent({
-      event: "auth.session.revoked",
+export const createOperatorAction = tenantAction(
+  ADMIN_WRITE,
+  async ({ tenant, session }, _: State, form: FormData): Promise<State> => {
+    const text = formText(form);
+    const parsed = createOperatorInput.safeParse({
+      displayName: text("displayName"),
+      username: text("username"),
+      email: text("email").trim(),
+    });
+    if (!parsed.success) {
+      return err(
+        "operators.add.invalid",
+        parsed.error.issues.map((i) => i.path.join(".")),
+      );
+    }
+    if (!(await consume(RATE_LIMITS.credentialIssued, `tenant:${tenant.slug}`, "tenant"))) {
+      return err("operators.throttled");
+    }
+    const c = getContainer();
+    const ctx = { tenantId: tenant.tenantId, actorUserId: session.userId, now: c.clock.now() };
+    const created = await createOperator(c.pool, parsed.data, ctx);
+    revalidatePath(`/${tenant.slug}/admin/operators`);
+    if (!created.ok) return CREATE_ERRORS[created.code];
+    await tokenIssued({
       realm: "tenant",
-      outcome: "success",
+      reasonCode: "activation",
       actorId: session.userId,
       subjectTenantId: tenant.tenantId,
-      reasonCode: "operator_deactivated",
     });
-  }
-  return { status: "done", messageKey: active ? "operators.reactivated" : "operators.deactivated" };
-}
+    const sent = await deliver(tenant.slug, tenant.tenantId, created.link);
+    return sent
+      ? { status: "done", messageKey: "operators.add.sent" }
+      : err("operators.add.notSent");
+  },
+);
 
-export async function reissueOperatorLinkAction(
-  slug: string,
-  id: string,
-): Promise<ConsoleActionState> {
-  const { tenant, session, refusal } = await guard(slug);
-  if (refusal) return err(refusal);
-  if (!(await consume(RATE_LIMITS.credentialIssued, `tenant:${tenant.slug}`, "tenant"))) {
-    return err("operators.throttled");
-  }
-  const c = getContainer();
-  const issued = await reissueOperatorLink(
-    c.pool,
-    { id },
-    {
-      tenantId: tenant.tenantId,
-      actorUserId: session.userId,
-      now: c.clock.now(),
-    },
-  );
-  if (!issued.ok) {
+export const setOperatorActiveAction = tenantAction(
+  ADMIN_WRITE,
+  async ({ tenant, session }, id: string, active: boolean): Promise<ConsoleActionState> => {
+    const c = getContainer();
+    const result = await setOperatorActive(
+      c.pool,
+      { id, active },
+      {
+        tenantId: tenant.tenantId,
+        now: c.clock.now(),
+      },
+    );
     revalidatePath(`/${tenant.slug}/admin/operators`);
-    return err(issued.code === "NOT_FOUND" ? "operators.notFound" : "operators.notPending");
-  }
-  await tokenIssued({
-    realm: "tenant",
-    reasonCode: "activation",
-    actorId: session.userId,
-    subjectTenantId: tenant.tenantId,
-  });
-  const sent = await deliver(tenant.slug, tenant.tenantId, issued.link);
-  revalidatePath(`/${tenant.slug}/admin/operators`);
-  return sent ? { status: "done", messageKey: "operators.resent" } : err("operators.resendFailed");
-}
+    if (!result.ok) {
+      return err(result.code === "NOT_FOUND" ? "operators.notFound" : "operators.add.limitReached");
+    }
+    if (result.sessionsRevoked > 0) {
+      await securityEvent({
+        event: "auth.session.revoked",
+        realm: "tenant",
+        outcome: "success",
+        actorId: session.userId,
+        subjectTenantId: tenant.tenantId,
+        reasonCode: "operator_deactivated",
+      });
+    }
+    return {
+      status: "done",
+      messageKey: active ? "operators.reactivated" : "operators.deactivated",
+    };
+  },
+);
 
-export async function updateOperatorAction(
-  slug: string,
-  id: string,
-  _: ConsoleActionState,
-  form: FormData,
-): Promise<ConsoleActionState> {
-  const { tenant, refusal } = await guard(slug);
-  if (refusal) return err(refusal);
-  const text = formText(form);
-  const parsed = updateOperatorInput.safeParse({
-    displayName: text("displayName"),
-    email: text("email").trim(),
-  });
-  if (!parsed.success) return err("operators.add.invalid");
-  const c = getContainer();
-  const result = await updateOperator(
-    c.pool,
-    { id, ...parsed.data },
-    {
-      tenantId: tenant.tenantId,
-      now: c.clock.now(),
-    },
-  );
-  revalidatePath(`/${tenant.slug}/admin/operators`);
-  if (!result.ok) return err("operators.notFound");
-  if (!result.emailChanged) return { status: "done", messageKey: "operators.edit.saved" };
-  dispatchAfterResponse({ kind: "tenant", tenantId: tenant.tenantId });
-  return { status: "done", messageKey: "operators.edit.emailNotice" };
-}
+export const reissueOperatorLinkAction = tenantAction(
+  ADMIN_WRITE,
+  async ({ tenant, session }, id: string): Promise<ConsoleActionState> => {
+    if (!(await consume(RATE_LIMITS.credentialIssued, `tenant:${tenant.slug}`, "tenant"))) {
+      return err("operators.throttled");
+    }
+    const c = getContainer();
+    const issued = await reissueOperatorLink(
+      c.pool,
+      { id },
+      {
+        tenantId: tenant.tenantId,
+        actorUserId: session.userId,
+        now: c.clock.now(),
+      },
+    );
+    if (!issued.ok) {
+      revalidatePath(`/${tenant.slug}/admin/operators`);
+      return err(issued.code === "NOT_FOUND" ? "operators.notFound" : "operators.notPending");
+    }
+    await tokenIssued({
+      realm: "tenant",
+      reasonCode: "activation",
+      actorId: session.userId,
+      subjectTenantId: tenant.tenantId,
+    });
+    const sent = await deliver(tenant.slug, tenant.tenantId, issued.link);
+    revalidatePath(`/${tenant.slug}/admin/operators`);
+    return sent
+      ? { status: "done", messageKey: "operators.resent" }
+      : err("operators.resendFailed");
+  },
+);
+
+export const updateOperatorAction = tenantAction(
+  ADMIN_WRITE,
+  async (
+    { tenant },
+    id: string,
+    _: ConsoleActionState,
+    form: FormData,
+  ): Promise<ConsoleActionState> => {
+    const text = formText(form);
+    const parsed = updateOperatorInput.safeParse({
+      displayName: text("displayName"),
+      email: text("email").trim(),
+    });
+    if (!parsed.success) return err("operators.add.invalid");
+    const c = getContainer();
+    const result = await updateOperator(
+      c.pool,
+      { id, ...parsed.data },
+      {
+        tenantId: tenant.tenantId,
+        now: c.clock.now(),
+      },
+    );
+    revalidatePath(`/${tenant.slug}/admin/operators`);
+    if (!result.ok) return err("operators.notFound");
+    if (!result.emailChanged) return { status: "done", messageKey: "operators.edit.saved" };
+    dispatchAfterResponse({ kind: "tenant", tenantId: tenant.tenantId });
+    return { status: "done", messageKey: "operators.edit.emailNotice" };
+  },
+);

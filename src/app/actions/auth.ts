@@ -18,6 +18,7 @@ import { resolveTenantBySlug } from "@/modules/tenancy";
 import { sessionCookie, type CookieRealm } from "@/platform/http/session-cookie";
 import { RATE_LIMITS } from "@/platform/rate-limit/postgres";
 
+import { systemAction, tenantAction } from "@/app/_lib/define-action";
 import { dispatchAfterResponse } from "@/app/_lib/outbox";
 import { consume, limitReached, requestIp, securityEvent } from "@/app/_lib/security";
 
@@ -279,21 +280,18 @@ async function rotatePassword(
   return { status: "error", messageKey: "auth.account.currentInvalid" };
 }
 
-export async function changeSystemPasswordAction(
-  _: AuthFormState,
-  form: FormData,
-): Promise<AuthFormState> {
-  return rotatePassword("system", SYSTEM_REALM, form);
-}
+// AUT-08: any signed-in account of the realm; allowed while read-only (ro_allowed).
+export const changeSystemPasswordAction = systemAction(
+  (_ctx, _: AuthFormState, form: FormData): Promise<AuthFormState> =>
+    rotatePassword("system", SYSTEM_REALM, form),
+);
 
-export async function changeTenantPasswordAction(
-  slug: string,
-  _: AuthFormState,
-  form: FormData,
-): Promise<AuthFormState> {
-  const tenant = await resolveTenantBySlug(getContainer().pool, slug);
-  if (!tenant) {
-    return { status: "error", messageKey: "auth.account.currentInvalid" };
-  }
-  return rotatePassword("tenant", tenantRealm(tenant.tenantId), form);
-}
+export const changeTenantPasswordAction = tenantAction(
+  {
+    minRole: "operator",
+    writeClass: "ro_allowed",
+    onRefused: (messageKey): AuthFormState => ({ status: "error", messageKey }),
+  },
+  ({ tenant }, _: AuthFormState, form: FormData): Promise<AuthFormState> =>
+    rotatePassword("tenant", tenantRealm(tenant.tenantId), form),
+);

@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { tenantActivationMail } from "@/app/_lib/credential-mail";
 import { dispatchAfterResponse } from "@/app/_lib/outbox";
 import { consume, tokenIssued } from "@/app/_lib/security";
-import { requireSystemSession } from "@/app/_lib/session";
+import { systemAction } from "@/app/_lib/define-action";
 import { getContainer } from "@/composition/container";
 import type { MessageKey } from "@/i18n";
 import { issueAdminAccessLink } from "@/modules/auth";
@@ -63,56 +63,52 @@ function provisionError(code: string): CreateTenantState {
   };
 }
 
-export async function createTenantAction(
-  _: CreateTenantState,
-  form: FormData,
-): Promise<CreateTenantState> {
-  const session = await requireSystemSession();
-  const parsed = createTenantInput.safeParse(formToInput(form));
-  if (!parsed.success) {
-    const fields = parsed.error.issues.map((issue) => issue.path.join("."));
-    return { status: "error", messageKey: "system.newTenant.formInvalid", fields };
-  }
-  const c = getContainer();
-  const result = await provisionTenant(c.pool, parsed.data, {
-    actorUserId: session.userId,
-    now: c.clock.now(),
-  });
-  if (!result.ok) {
-    return provisionError(result.code);
-  }
-  await tokenIssued({
-    realm: "system",
-    reasonCode: "activation",
-    actorId: session.userId,
-    subjectTenantId: result.tenantId,
-  });
-  const sent = await c.mailer.sendSystem(
-    tenantActivationMail(result.slug, { ...parsed.data.admin, token: result.activationToken }),
-  );
-  return { status: "created", slug: result.slug, emailSent: sent.ok };
-}
+export const createTenantAction = systemAction(
+  async ({ session }, _: CreateTenantState, form: FormData): Promise<CreateTenantState> => {
+    const parsed = createTenantInput.safeParse(formToInput(form));
+    if (!parsed.success) {
+      const fields = parsed.error.issues.map((issue) => issue.path.join("."));
+      return { status: "error", messageKey: "system.newTenant.formInvalid", fields };
+    }
+    const c = getContainer();
+    const result = await provisionTenant(c.pool, parsed.data, {
+      actorUserId: session.userId,
+      now: c.clock.now(),
+    });
+    if (!result.ok) {
+      return provisionError(result.code);
+    }
+    await tokenIssued({
+      realm: "system",
+      reasonCode: "activation",
+      actorId: session.userId,
+      subjectTenantId: result.tenantId,
+    });
+    const sent = await c.mailer.sendSystem(
+      tenantActivationMail(result.slug, { ...parsed.data.admin, token: result.activationToken }),
+    );
+    return { status: "created", slug: result.slug, emailSent: sent.ok };
+  },
+);
 
 // Console commands on one tenant (TEN-05/06, SUB-02, AUT-17). Each re-checks the system session.
 
-export async function setTenantStatusAction(
-  slug: string,
-  to: "suspended" | "active",
-): Promise<ConsoleActionState> {
-  const session = await requireSystemSession();
-  const c = getContainer();
-  const result = await setTenantStatus(
-    c.pool,
-    { slug, to },
-    { actorUserId: session.userId, now: c.clock.now() },
-  );
-  revalidatePath(`/system/tenants/${slug}`);
-  if (!result.ok) return { status: "error", messageKey: "tenantDetail.notFound" };
-  return {
-    status: "done",
-    messageKey: result.changed ? "tenantDetail.statusChanged" : "tenantDetail.statusUnchanged",
-  };
-}
+export const setTenantStatusAction = systemAction(
+  async ({ session }, slug: string, to: "suspended" | "active"): Promise<ConsoleActionState> => {
+    const c = getContainer();
+    const result = await setTenantStatus(
+      c.pool,
+      { slug, to },
+      { actorUserId: session.userId, now: c.clock.now() },
+    );
+    revalidatePath(`/system/tenants/${slug}`);
+    if (!result.ok) return { status: "error", messageKey: "tenantDetail.notFound" };
+    return {
+      status: "done",
+      messageKey: result.changed ? "tenantDetail.statusChanged" : "tenantDetail.statusUnchanged",
+    };
+  },
+);
 
 const RENEW_ERRORS: Record<string, MessageKey> = {
   NOT_FOUND: "tenantDetail.notFound",
@@ -120,47 +116,50 @@ const RENEW_ERRORS: Record<string, MessageKey> = {
   SUBSCRIPTION_OVERLAP: "tenantDetail.overlap",
 };
 
-export async function renewSubscriptionAction(
-  slug: string,
-  subscriptionId: string,
-  _: ConsoleActionState,
-  form: FormData,
-): Promise<ConsoleActionState> {
-  const session = await requireSystemSession();
-  const endDate = form.get("endDate");
-  if (typeof endDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
-    return { status: "error", messageKey: "tenantDetail.periodInvalid" };
-  }
-  const c = getContainer();
-  const result = await changeSubscriptionEnd(
-    c.pool,
-    { slug, subscriptionId, endDate },
-    { actorUserId: session.userId, now: c.clock.now() },
-  );
-  revalidatePath(`/system/tenants/${slug}`);
-  return result.ok
-    ? { status: "done", messageKey: "tenantDetail.renewed" }
-    : { status: "error", messageKey: RENEW_ERRORS[result.code] ?? "tenantDetail.notFound" };
-}
+export const renewSubscriptionAction = systemAction(
+  async (
+    { session },
+    target: { slug: string; subscriptionId: string },
+    _: ConsoleActionState,
+    form: FormData,
+  ): Promise<ConsoleActionState> => {
+    const { slug, subscriptionId } = target;
+    const endDate = form.get("endDate");
+    if (typeof endDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+      return { status: "error", messageKey: "tenantDetail.periodInvalid" };
+    }
+    const c = getContainer();
+    const result = await changeSubscriptionEnd(
+      c.pool,
+      { slug, subscriptionId, endDate },
+      { actorUserId: session.userId, now: c.clock.now() },
+    );
+    revalidatePath(`/system/tenants/${slug}`);
+    return result.ok
+      ? { status: "done", messageKey: "tenantDetail.renewed" }
+      : { status: "error", messageKey: RENEW_ERRORS[result.code] ?? "tenantDetail.notFound" };
+  },
+);
 
-export async function adminAccessLinkAction(slug: string): Promise<ConsoleActionState> {
-  const session = await requireSystemSession();
-  // RL-09: at most 20 credential links per tenant per hour.
-  if (!(await consume(RATE_LIMITS.credentialIssued, `tenant:${slug}`, "system"))) {
-    return { status: "error", messageKey: "tenantDetail.accessLinkThrottled" };
-  }
-  const c = getContainer();
-  const link = await issueAdminAccessLink(c.pool, {
-    slug,
-    actorUserId: session.userId,
-    now: c.clock.now(),
-  });
-  revalidatePath(`/system/tenants/${slug}`);
-  if (!link) return { status: "error", messageKey: "tenantDetail.adminNone" };
-  await tokenIssued({ realm: "system", reasonCode: "admin_access", actorId: session.userId });
-  dispatchAfterResponse({ kind: "tenant", tenantId: link.tenantId });
-  const sent = await c.mailer.sendSystem(tenantActivationMail(slug, link));
-  return sent.ok
-    ? { status: "done", messageKey: "tenantDetail.accessLinkSent" }
-    : { status: "error", messageKey: "tenantDetail.accessLinkFailed" };
-}
+export const adminAccessLinkAction = systemAction(
+  async ({ session }, slug: string): Promise<ConsoleActionState> => {
+    // RL-09: at most 20 credential links per tenant per hour.
+    if (!(await consume(RATE_LIMITS.credentialIssued, `tenant:${slug}`, "system"))) {
+      return { status: "error", messageKey: "tenantDetail.accessLinkThrottled" };
+    }
+    const c = getContainer();
+    const link = await issueAdminAccessLink(c.pool, {
+      slug,
+      actorUserId: session.userId,
+      now: c.clock.now(),
+    });
+    revalidatePath(`/system/tenants/${slug}`);
+    if (!link) return { status: "error", messageKey: "tenantDetail.adminNone" };
+    await tokenIssued({ realm: "system", reasonCode: "admin_access", actorId: session.userId });
+    dispatchAfterResponse({ kind: "tenant", tenantId: link.tenantId });
+    const sent = await c.mailer.sendSystem(tenantActivationMail(slug, link));
+    return sent.ok
+      ? { status: "done", messageKey: "tenantDetail.accessLinkSent" }
+      : { status: "error", messageKey: "tenantDetail.accessLinkFailed" };
+  },
+);

@@ -44,7 +44,7 @@ function SubscriptionCard(props: { slug: string; sub: TenantDetail["subscription
       <p>{limits}</p>
       {s.status === "cancelled" ? null : (
         <ConsoleActionForm
-          action={renewSubscriptionAction.bind(null, props.slug, s.id)}
+          action={renewSubscriptionAction.bind(null, { slug: props.slug, subscriptionId: s.id })}
           submit="tenantDetail.renew"
         >
           <Field

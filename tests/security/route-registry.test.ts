@@ -15,22 +15,31 @@ function walk(dir: string): string[] {
   });
 }
 
-function discovered(): string[] {
-  const ids: string[] = [];
-  for (const file of walk(APP)) {
-    const rel = relative(APP, file).split("\\").join("/");
-    if (rel.startsWith("actions/") && rel.endsWith(".ts")) {
-      const source = readFileSync(file, "utf8");
-      for (const m of source.matchAll(/^export async function (\w+)/gm)) {
-        ids.push(`action:${rel.replace(/\.ts$/, "")}#${m[1] ?? ""}`);
-      }
-    } else if (rel.endsWith("/route.ts")) {
-      ids.push(`route:${rel.replace(/\/route\.ts$/, "")}`);
-    } else if (rel === "page.tsx" || rel.endsWith("/page.tsx")) {
-      ids.push(`page:${rel === "page.tsx" ? "page" : rel.replace(/\/page\.tsx$/, "")}`);
-    }
+const EXPORTED = /^export (?:async function (\w+)|const (\w+) = (?:tenantAction|systemAction)\()/gm;
+
+function actionIds(file: string, rel: string): string[] {
+  const source = readFileSync(file, "utf8");
+  return [...source.matchAll(EXPORTED)].map(
+    (m) => `action:${rel.replace(/\.ts$/, "")}#${m[1] ?? m[2] ?? ""}`,
+  );
+}
+
+function entryIds(file: string): string[] {
+  const rel = relative(APP, file).split("\\").join("/");
+  if (rel.startsWith("actions/") && rel.endsWith(".ts")) {
+    return actionIds(file, rel);
   }
-  return ids.sort();
+  if (rel.endsWith("/route.ts")) {
+    return [`route:${rel.replace(/\/route\.ts$/, "")}`];
+  }
+  if (rel === "page.tsx" || rel.endsWith("/page.tsx")) {
+    return [`page:${rel === "page.tsx" ? "page" : rel.replace(/\/page\.tsx$/, "")}`];
+  }
+  return [];
+}
+
+function discovered(): string[] {
+  return walk(APP).flatMap(entryIds).sort();
 }
 
 describe("route registry", () => {
@@ -48,8 +57,40 @@ describe("route registry", () => {
       }
     }
   });
+});
 
-  // Actions are checked by behaviour in tests/integration/access-matrix.test.ts.
+describe("route registry: guards", () => {
+  // defineAction (06-backend-api 3.2): protected actions are built with the wrapper of their realm,
+  // with the role the registry declares; their behaviour is in tests/integration/access-matrix.
+  it("builds every protected action with tenantAction or systemAction", () => {
+    const actions = ENTRY_POINTS.filter(
+      (x) => x.id.startsWith("action:") && (x.realm === "tenant" || x.realm === "system"),
+    );
+    for (const e of actions) {
+      const [file = "", name = ""] = e.id.slice("action:".length).split("#");
+      const source = readFileSync(join(APP, `${file}.ts`), "utf8");
+      const start = source.indexOf(`export const ${name} = `);
+      expect(start, `${e.id} is not built with a wrapper`).toBeGreaterThanOrEqual(0);
+      const head = source.slice(start, start + 400);
+      if (e.realm === "system") {
+        expect(head, e.id).toContain("systemAction(");
+      } else {
+        expect(head, e.id).toContain("tenantAction(");
+        // Either inline options or a shared constant of the same file (its minRole is read from it).
+        const options = head.includes("minRole")
+          ? head
+          : source.slice(
+              source.indexOf("const ADMIN_WRITE = "),
+              source.indexOf("const ADMIN_WRITE = ") + 200,
+            );
+        expect(/minRole: "(\w+)"/.exec(options)?.[1], e.id).toBe(e.minRole);
+      }
+    }
+  });
+});
+
+describe("route registry: pages", () => {
+  // Pages are checked statically here.
   it("guards every protected page in code", () => {
     const pages = ENTRY_POINTS.filter(
       (x) => x.id.startsWith("page:") && (x.realm === "tenant" || x.realm === "system"),
