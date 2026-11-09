@@ -7,6 +7,7 @@ import {
   peekCredentialLink,
   redeemCredentialLink,
   resolveSession,
+  tenantRealm,
 } from "../../src/modules/auth";
 import { withTenantTx } from "../../src/platform/db/tenant-tx";
 
@@ -48,13 +49,13 @@ async function cleanup(f: Fixture): Promise<void> {
 
 async function issue(f: Fixture, purpose: "activation" | "password_reset" = "activation") {
   return withTenantTx(app, f.tenantId, (client) =>
-    issueCredentialLink(client, { tenantId: f.tenantId, userId: f.userId, purpose, now }),
+    issueCredentialLink(client, { realm: tenantRealm(f.tenantId), userId: f.userId, purpose, now }),
   );
 }
 
 function redeem(f: Fixture, token: string, password = NEW_PASSWORD, at = now) {
   return redeemCredentialLink(app, {
-    tenantId: f.tenantId,
+    realm: tenantRealm(f.tenantId),
     token,
     password,
     pepper: PEPPER,
@@ -67,17 +68,19 @@ describe.skipIf(!adminUrl || !appUrl)("credential links: activation", () => {
     const f = await seed();
     try {
       const token = await issue(f);
-      const peek = await peekCredentialLink(app, { tenantId: f.tenantId, token, now });
+      const peek = await peekCredentialLink(app, { realm: tenantRealm(f.tenantId), token, now });
       expect(peek).toEqual({ state: "valid", purpose: "activation", username: "admin1" });
       const result = await redeem(f, token);
       expect(result.status).toBe("ok");
       const sessionToken = result.status === "ok" ? (result.sessionToken ?? "") : "";
-      expect(await resolveSession(app, { tenantId: f.tenantId, token: sessionToken, now })).toEqual(
-        { userId: f.userId, role: "admin" },
+      expect(
+        await resolveSession(app, { realm: tenantRealm(f.tenantId), token: sessionToken, now }),
+      ).toEqual({ userId: f.userId, role: "admin" });
+      expect(await peekCredentialLink(app, { realm: tenantRealm(f.tenantId), token, now })).toEqual(
+        {
+          state: "used",
+        },
       );
-      expect(await peekCredentialLink(app, { tenantId: f.tenantId, token, now })).toEqual({
-        state: "used",
-      });
     } finally {
       await cleanup(f);
     }

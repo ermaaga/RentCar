@@ -2,7 +2,6 @@ import type pg from "pg";
 
 import { hashPassword } from "../../../platform/crypto/password";
 import { generateToken, hashToken } from "../../../platform/crypto/token";
-import { withTenantTx } from "../../../platform/db/tenant-tx";
 import {
   credentialExpiry,
   credentialState,
@@ -11,13 +10,15 @@ import {
   type CredentialState,
 } from "../domain/credential-policy";
 import { checkPassword } from "../domain/password-policy";
+import { realmTenantId, type Realm } from "../domain/realm";
+import { withRealmTx } from "./realm-tx";
 import { insertSession } from "./sessions";
 
-// Set-password links for tenant staff (docs/06-backend-api.md 4.2.2). Only the SHA-256 of the token
+// Set-password links for tenant staff and the systemadmin (docs/06-backend-api.md 4.2.2). Only the SHA-256 of the token
 // is stored; the plaintext is returned to the caller in memory and never logged or persisted.
 
 export interface IssueInput {
-  tenantId: string;
+  realm: Realm;
   userId: string;
   purpose: CredentialPurpose;
   createdByUserId?: string;
@@ -39,7 +40,7 @@ export async function issueCredentialLink(
     `INSERT INTO credential_tokens (id, tenant_id, user_id, purpose, token_hash, expires_at, created_by_user_id, created_at)
      VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)`,
     [
-      input.tenantId,
+      realmTenantId(input.realm),
       input.userId,
       input.purpose,
       hashToken(token),
@@ -67,12 +68,20 @@ interface LinkRow {
   superseded_at: Date | null;
 }
 
-async function readLink(client: pg.ClientBase, token: string): Promise<LinkRow | undefined> {
+// The realm filter matters in the system scope, which can read every token: a tenant link must
+// never be redeemable through the system pages.
+async function readLink(
+  client: pg.ClientBase,
+  realm: Realm,
+  token: string,
+): Promise<LinkRow | undefined> {
   const res = await client.query<LinkRow>(
     `SELECT t.user_id, t.purpose, u.username, u.email, t.expires_at, t.used_at, t.superseded_at
-       FROM credential_tokens t JOIN users u ON u.tenant_id = t.tenant_id AND u.id = t.user_id
-      WHERE t.token_hash = $1 AND u.status <> 'deactivated'`,
-    [hashToken(token)],
+       FROM credential_tokens t
+       JOIN users u ON u.id = t.user_id AND u.tenant_id IS NOT DISTINCT FROM t.tenant_id
+      WHERE t.token_hash = $1 AND t.tenant_id IS NOT DISTINCT FROM $2::uuid
+        AND u.status <> 'deactivated'`,
+    [hashToken(token), realmTenantId(realm)],
   );
   return res.rows[0];
 }
@@ -90,15 +99,15 @@ function toPeek(row: LinkRow | undefined, now: Date): CredentialPeek {
 /** Read only: a scanner that opens the link cannot burn it. */
 export async function peekCredentialLink(
   pool: pg.Pool,
-  input: { tenantId: string; token: string; now: Date },
+  input: { realm: Realm; token: string; now: Date },
 ): Promise<CredentialPeek> {
-  return withTenantTx(pool, input.tenantId, async (client) =>
-    toPeek(await readLink(client, input.token), input.now),
+  return withRealmTx(pool, input.realm, async (client) =>
+    toPeek(await readLink(client, input.realm, input.token), input.now),
   );
 }
 
 export interface RedeemInput {
-  tenantId: string;
+  realm: Realm;
   token: string;
   password: string;
   pepper: string;
@@ -117,15 +126,22 @@ async function consume(
   const res = await client.query<{ user_id: string; purpose: CredentialPurpose }>(
     `UPDATE credential_tokens SET used_at = $2
       WHERE token_hash = $1 AND used_at IS NULL AND superseded_at IS NULL AND expires_at > $2
+        AND tenant_id IS NOT DISTINCT FROM $3::uuid
       RETURNING user_id, purpose`,
-    [hashToken(input.token), input.now],
+    [hashToken(input.token), input.now, realmTenantId(input.realm)],
   );
   const row = res.rows[0];
   return row && { userId: row.user_id, purpose: row.purpose };
 }
 
-async function tenantIsActive(client: pg.ClientBase): Promise<boolean> {
-  const res = await client.query<{ status: string }>("SELECT status FROM tenants");
+/** The system realm has no tenant; a tenant realm needs an active tenant. */
+async function realmIsOpen(client: pg.ClientBase, realm: Realm): Promise<boolean> {
+  if (realm.kind === "system") {
+    return true;
+  }
+  const res = await client.query<{ status: string }>("SELECT status FROM tenants WHERE id = $1", [
+    realm.tenantId,
+  ]);
   return res.rows[0]?.status === "active";
 }
 
@@ -164,7 +180,7 @@ export async function redeemCredentialLink(
   }
   const hash = await hashPassword(input.password, input.pepper);
   try {
-    return await withTenantTx(pool, input.tenantId, (client) => applyRedeem(client, input, hash));
+    return await withRealmTx(pool, input.realm, (client) => applyRedeem(client, input, hash));
   } catch (err) {
     if (err instanceof RedeemRefused) {
       return { status: "invalid" };
@@ -182,7 +198,7 @@ async function applyRedeem(
   hash: string,
 ): Promise<RedeemResult> {
   const used = await consume(client, input);
-  if (!used || !(await tenantIsActive(client))) {
+  if (!used || !(await realmIsOpen(client, input.realm))) {
     throw new RedeemRefused();
   }
   if (!(await setPassword(client, used.userId, hash, input.now))) {
@@ -191,6 +207,6 @@ async function applyRedeem(
   if (!startsSession(used.purpose)) {
     return { status: "ok", purpose: used.purpose };
   }
-  const session = await insertSession(client, input.tenantId, used.userId, input.now);
+  const session = await insertSession(client, input.realm, used.userId, input.now);
   return { status: "ok", purpose: used.purpose, sessionToken: session.token };
 }

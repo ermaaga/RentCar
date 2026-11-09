@@ -2,13 +2,14 @@ import type pg from "pg";
 
 import { hashPassword, verifyPassword } from "../../../platform/crypto/password";
 import { generateToken, hashToken } from "../../../platform/crypto/token";
-import { withTenantTx } from "../../../platform/db/tenant-tx";
+import { realmTenantId, type Realm } from "../domain/realm";
 import { extendIdle, LAST_SEEN_THROTTLE_MS, newSessionWindow } from "../domain/session-policy";
 import { retryAfterSeconds } from "../domain/throttle-policy";
+import { withRealmTx } from "./realm-tx";
 import { isThrottled, loginKey, recordFailure } from "./throttle";
 
 export interface LoginInput {
-  tenantId: string;
+  realm: Realm;
   username: string;
   password: string;
   peppers: readonly string[];
@@ -23,7 +24,7 @@ export type LoginResult =
 
 export interface ResolvedSession {
   userId: string;
-  role: "admin" | "operator";
+  role: "admin" | "operator" | "systemadmin";
 }
 
 // Used when the username does not exist, so the response time does not reveal which usernames exist.
@@ -35,14 +36,16 @@ function getDummyHash(pepper: string): Promise<string> {
 
 async function findActiveUser(client: pg.PoolClient, input: LoginInput) {
   const res = await client.query<{ id: string; password_hash: string | null }>(
-    "SELECT id, password_hash FROM users WHERE tenant_id = $1 AND username = $2 AND status = 'active'",
-    [input.tenantId, input.username],
+    `SELECT id, password_hash FROM users
+      WHERE tenant_id IS NOT DISTINCT FROM $1::uuid AND username = $2 AND status = 'active'
+        AND (role = 'systemadmin') = ($1::uuid IS NULL)`,
+    [realmTenantId(input.realm), input.username],
   );
   return res.rows[0];
 }
 
 async function checkCredentials(pool: pg.Pool, input: LoginInput): Promise<{ id: string } | null> {
-  return withTenantTx(pool, input.tenantId, async (client) => {
+  return withRealmTx(pool, input.realm, async (client) => {
     const user = await findActiveUser(client, input);
     const storedHash = user?.password_hash ?? (await getDummyHash(input.peppers[0] ?? ""));
     const ok = await verifyPassword(input.password, storedHash, input.peppers);
@@ -50,33 +53,30 @@ async function checkCredentials(pool: pg.Pool, input: LoginInput): Promise<{ id:
   });
 }
 
-/** Inserts a tenant session in the caller's transaction; returns the plaintext token once. */
+/** Inserts a session in the caller's transaction; returns the plaintext token once. */
 export async function insertSession(
   client: pg.ClientBase,
-  tenantId: string,
+  realm: Realm,
   userId: string,
   now: Date,
 ): Promise<{ token: string; absoluteExpiresAt: Date }> {
   const token = generateToken();
-  const window = newSessionWindow(now);
+  const window = newSessionWindow(now, realm.kind);
   await client.query(
-    `INSERT INTO sessions (id, tenant_id, realm, user_id, token_hash, idle_expires_at, absolute_expires_at)
-     VALUES (gen_random_uuid(), $1, 'tenant', $2, $3, $4, $5)`,
-    [tenantId, userId, hashToken(token), window.idleExpiresAt, window.absoluteExpiresAt],
+    `INSERT INTO sessions (id, tenant_id, realm, user_id, token_hash, idle_expires_at, absolute_expires_at, created_at)
+     VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)`,
+    [
+      realmTenantId(realm),
+      realm.kind,
+      userId,
+      hashToken(token),
+      window.idleExpiresAt,
+      window.absoluteExpiresAt,
+      now,
+    ],
   );
   await client.query("UPDATE users SET last_login_at = $2 WHERE id = $1", [userId, now]);
   return { token, absoluteExpiresAt: window.absoluteExpiresAt };
-}
-
-async function openSessionRow(
-  pool: pg.Pool,
-  input: LoginInput,
-  userId: string,
-): Promise<LoginResult> {
-  const session = await withTenantTx(pool, input.tenantId, (client) =>
-    insertSession(client, input.tenantId, userId, input.now),
-  );
-  return { status: "ok", userId, ...session };
 }
 
 /**
@@ -84,7 +84,7 @@ async function openSessionRow(
  * it costs no hashing time. A failed attempt is counted only after the check.
  */
 export async function login(pool: pg.Pool, input: LoginInput): Promise<LoginResult> {
-  const key = loginKey(input.hmacKey, input.tenantId, input.username);
+  const key = loginKey(input.hmacKey, realmTenantId(input.realm) ?? "system", input.username);
   if (await isThrottled(pool, key, input.now)) {
     return { status: "throttled", retryAfterSeconds: retryAfterSeconds(input.now) };
   }
@@ -93,28 +93,42 @@ export async function login(pool: pg.Pool, input: LoginInput): Promise<LoginResu
     await recordFailure(pool, key, input.now);
     return { status: "invalid" };
   }
-  return openSessionRow(pool, input, user.id);
+  const session = await withRealmTx(pool, input.realm, (client) =>
+    insertSession(client, input.realm, user.id, input.now),
+  );
+  return { status: "ok", userId: user.id, ...session };
 }
+
+interface SessionRow {
+  id: string;
+  user_id: string;
+  role: ResolvedSession["role"];
+  idle_expires_at: Date;
+  absolute_expires_at: Date;
+  last_seen_at: Date;
+}
+
+// A session is valid only for an active user, of the right realm, not older than the last password
+// change, and (tenant realm) for an active tenant (06-backend-api 4.1).
+const SESSION_LOOKUP = `
+  SELECT s.id, s.user_id, u.role, s.idle_expires_at, s.absolute_expires_at, s.last_seen_at
+    FROM sessions s
+    JOIN users u ON u.id = s.user_id AND u.tenant_id IS NOT DISTINCT FROM s.tenant_id
+   WHERE s.token_hash = $1 AND s.realm = $2 AND u.status = 'active'
+     AND (u.password_changed_at IS NULL OR u.password_changed_at <= s.created_at)
+     AND (s.tenant_id IS NULL OR EXISTS (
+           SELECT 1 FROM tenants t WHERE t.id = s.tenant_id AND t.status = 'active'))`;
 
 /** Resolves a token to an active session, extending the idle window at most once per throttle interval. */
 export async function resolveSession(
   pool: pg.Pool,
-  input: { tenantId: string; token: string; now: Date },
+  input: { realm: Realm; token: string; now: Date },
 ): Promise<ResolvedSession | null> {
-  return withTenantTx(pool, input.tenantId, async (client) => {
-    const res = await client.query<{
-      id: string;
-      user_id: string;
-      role: "admin" | "operator";
-      idle_expires_at: Date;
-      absolute_expires_at: Date;
-      last_seen_at: Date;
-    }>(
-      `SELECT s.id, s.user_id, u.role, s.idle_expires_at, s.absolute_expires_at, s.last_seen_at
-         FROM sessions s JOIN users u ON u.tenant_id = s.tenant_id AND u.id = s.user_id
-        WHERE s.token_hash = $1 AND u.status = 'active'`,
-      [hashToken(input.token)],
-    );
+  return withRealmTx(pool, input.realm, async (client) => {
+    const res = await client.query<SessionRow>(SESSION_LOOKUP, [
+      hashToken(input.token),
+      input.realm.kind,
+    ]);
     const row = res.rows[0];
     if (!row || row.idle_expires_at <= input.now || row.absolute_expires_at <= input.now) {
       return null;
@@ -123,6 +137,7 @@ export async function resolveSession(
       const idle = extendIdle(
         { idleExpiresAt: row.idle_expires_at, absoluteExpiresAt: row.absolute_expires_at },
         input.now,
+        input.realm.kind,
       );
       await client.query(
         "UPDATE sessions SET last_seen_at = $2, idle_expires_at = $3 WHERE id = $1",
@@ -136,11 +151,12 @@ export async function resolveSession(
 /** Logout: deletes the session row (05-database 5.6: revocation is deletion). */
 export async function revokeSession(
   pool: pg.Pool,
-  input: { tenantId: string; token: string },
+  input: { realm: Realm; token: string },
 ): Promise<boolean> {
-  return withTenantTx(pool, input.tenantId, async (client) => {
-    const res = await client.query("DELETE FROM sessions WHERE token_hash = $1", [
+  return withRealmTx(pool, input.realm, async (client) => {
+    const res = await client.query("DELETE FROM sessions WHERE token_hash = $1 AND realm = $2", [
       hashToken(input.token),
+      input.realm.kind,
     ]);
     return (res.rowCount ?? 0) > 0;
   });
