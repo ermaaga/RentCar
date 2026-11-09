@@ -144,6 +144,8 @@ export const en = {
   },
   admin: {
     home: { title: "Dashboard", signedIn: "You are signed in." },
+    readOnly:
+      "Your subscription has ended, so changes are paused. Contact the platform owner to renew.",
   },
   email: {
     credential: {
@@ -159,6 +161,56 @@ export const en = {
       },
       ignore:
         "If you did not expect this email, you can ignore it. Nothing changes until the link is used.",
+    },
+    smtpTest: {
+      subject: "RentCar test email",
+      body: "Your email settings work: this message was sent through your own mail server.",
+    },
+  },
+  settings: {
+    email: {
+      title: "Email settings",
+      intro:
+        "Emails to your customers and staff are sent through your own mail server. Ask your email provider for these values.",
+      host: "Mail server (SMTP host)",
+      port: "Port",
+      security: "Encryption",
+      securityTls: "TLS (usually port 465)",
+      securityStarttls: "STARTTLS (usually port 587)",
+      username: "Username",
+      password: "Password",
+      passwordKeep: "Leave empty to keep the saved password.",
+      fromAddress: "Sender address",
+      fromName: "Sender name (optional)",
+      save: "Save settings",
+      saving: "Saving…",
+      saved: "Email settings saved. Send a test email to check them.",
+      invalid: "Check the highlighted fields.",
+      passwordRequired: "Enter the password of the mail account.",
+      test: "Send a test email to me",
+      testing: "Sending…",
+      testSent: "Test email sent to your own address.",
+      testThrottled: "Too many test emails. Try again in an hour.",
+      notConfigured: "Save the email settings first.",
+      lastTest: "Last test: {result}",
+      lastTestOk: "worked",
+      lastTestFailed: "failed",
+      never: "never",
+      link: "Email settings",
+      readOnlyAdmin: "Only the administrator can change these settings.",
+      failure: {
+        invalid_host:
+          "The server name is not valid. Use a name like smtp.example.com, not an IP address.",
+        blocked_address: "This server name points to an address that cannot be used.",
+        blocked_port: "This port is not allowed. Use 25, 465, 587 or 2525.",
+        dns_failed: "The server name could not be found.",
+        connect_timeout: "The server did not answer in time.",
+        tls_failed: "A secure connection could not be set up. Check the encryption setting.",
+        auth_failed: "The username or password was refused.",
+        rejected: "The server refused the message.",
+        no_smtp: "Save the email settings first.",
+        unknown: "Sending failed for an unknown reason.",
+      },
     },
   },
 } as const;

@@ -65,3 +65,14 @@ export function renderCredentialEmail(input: CredentialEmailInput, t: Translate)
     ].join("\n"),
   };
 }
+
+/** NTF-02 test email (`smtp.test`): fixed text, sent to the acting user only (SR-SSRF-06). */
+export function renderSmtpTestEmail(to: string, t: Translate): RenderedEmail {
+  const body = t("email.smtpTest.body");
+  return {
+    to,
+    subject: t("email.smtpTest.subject"),
+    text: body,
+    html: `<p>${escapeHtml(body)}</p>`,
+  };
+}
