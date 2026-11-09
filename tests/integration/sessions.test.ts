@@ -2,7 +2,7 @@ import pg from "pg";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
-import { login, resolveSession, revokeSession } from "../../src/modules/auth";
+import { login, resolveSession, revokeSession, tenantRealm } from "../../src/modules/auth";
 import { hashPassword } from "../../src/platform/crypto/password";
 import { hashToken } from "../../src/platform/crypto/token";
 import { deriveKey } from "../../src/platform/crypto/keys";
@@ -47,7 +47,7 @@ async function cleanup(f: Fixture): Promise<void> {
 
 async function tryLogin(f: Fixture, username: string, password: string, at: Date = now) {
   return login(app, {
-    tenantId: f.tenantId,
+    realm: tenantRealm(f.tenantId),
     username,
     password,
     peppers: [PEPPER],
@@ -70,7 +70,7 @@ describe.skipIf(!adminUrl || !appUrl)("login", () => {
     try {
       const token = await openSession(f);
       expect(token.length).toBeGreaterThanOrEqual(43);
-      expect(await resolveSession(app, { tenantId: f.tenantId, token, now })).toEqual({
+      expect(await resolveSession(app, { realm: tenantRealm(f.tenantId), token, now })).toEqual({
         userId: f.userId,
         role: "operator",
       });
@@ -103,8 +103,8 @@ describe.skipIf(!adminUrl || !appUrl)("logout", () => {
     const f = await seed();
     try {
       const token = await openSession(f);
-      expect(await revokeSession(app, { tenantId: f.tenantId, token })).toBe(true);
-      expect(await resolveSession(app, { tenantId: f.tenantId, token, now })).toBeNull();
+      expect(await revokeSession(app, { realm: tenantRealm(f.tenantId), token })).toBe(true);
+      expect(await resolveSession(app, { realm: tenantRealm(f.tenantId), token, now })).toBeNull();
     } finally {
       await cleanup(f);
     }
@@ -117,9 +117,13 @@ describe.skipIf(!adminUrl || !appUrl)("session expiry", () => {
     try {
       const token = await openSession(f);
       const at25 = new Date(now.getTime() + 25 * MIN);
-      expect(await resolveSession(app, { tenantId: f.tenantId, token, now: at25 })).not.toBeNull();
+      expect(
+        await resolveSession(app, { realm: tenantRealm(f.tenantId), token, now: at25 }),
+      ).not.toBeNull();
       const at60 = new Date(now.getTime() + 60 * MIN);
-      expect(await resolveSession(app, { tenantId: f.tenantId, token, now: at60 })).toBeNull();
+      expect(
+        await resolveSession(app, { realm: tenantRealm(f.tenantId), token, now: at60 }),
+      ).toBeNull();
     } finally {
       await cleanup(f);
     }
@@ -131,10 +135,14 @@ describe.skipIf(!adminUrl || !appUrl)("session expiry", () => {
       const token = await openSession(f);
       for (let minutes = 20; minutes <= 11 * 60; minutes += 20) {
         const at = new Date(now.getTime() + minutes * MIN);
-        expect(await resolveSession(app, { tenantId: f.tenantId, token, now: at })).not.toBeNull();
+        expect(
+          await resolveSession(app, { realm: tenantRealm(f.tenantId), token, now: at }),
+        ).not.toBeNull();
       }
       const after = new Date(now.getTime() + 13 * 60 * MIN);
-      expect(await resolveSession(app, { tenantId: f.tenantId, token, now: after })).toBeNull();
+      expect(
+        await resolveSession(app, { realm: tenantRealm(f.tenantId), token, now: after }),
+      ).toBeNull();
     } finally {
       await cleanup(f);
     }

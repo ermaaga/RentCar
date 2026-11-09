@@ -2,7 +2,7 @@ import pg from "pg";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
-import { peekCredentialLink } from "../../src/modules/auth";
+import { peekCredentialLink, tenantRealm } from "../../src/modules/auth";
 import { createTenantInput, provisionTenant } from "../../src/modules/tenancy";
 import { validTenantInput } from "../support/tenant-input";
 
@@ -59,7 +59,7 @@ describe.skipIf(!adminUrl || !appUrl)("provisioning: create tenant", () => {
       );
       expect(rows.rows[0]).toEqual({ status: "pending", n_settings: 1, n_subs: 1 });
       const peek = await peekCredentialLink(app, {
-        tenantId: result.tenantId,
+        realm: tenantRealm(result.tenantId),
         token: result.activationToken,
         now,
       });

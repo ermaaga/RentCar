@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type pg from "pg";
 
 import { withSystemTx } from "../../../platform/db/system-tx";
-import { issueCredentialLink } from "../../auth";
+import { issueCredentialLink, tenantRealm } from "../../auth";
 import type { CreateTenantInput } from "../application/create-tenant-input";
 import { checkSlug } from "../domain/slug";
 
@@ -144,7 +144,7 @@ async function provisionInTx(
   await insertSubscription(c, ids, input);
   await insertAdmin(c, ids, input);
   const activationToken = await issueCredentialLink(c, {
-    tenantId: ids.tenantId,
+    realm: tenantRealm(ids.tenantId),
     userId: ids.adminUserId,
     purpose: "activation",
     now: ctx.now,
