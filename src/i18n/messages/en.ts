@@ -1,4 +1,5 @@
 import { adminMessages } from "./en-admin";
+import { publicMessages } from "./en-public";
 
 // Message catalog (single locale `en`). Keys are English identifiers `module.area.name` (03b section 13).
 export const en = {
@@ -198,6 +199,7 @@ export const en = {
     },
   },
   ...adminMessages,
+  ...publicMessages,
 } as const;
 
 export type Messages = typeof en;

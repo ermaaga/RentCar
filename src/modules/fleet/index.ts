@@ -1,4 +1,9 @@
-export { parsePriceToMinor, vehicleInput } from "./application/vehicle-input";
+export {
+  FUEL_TYPES,
+  parsePriceToMinor,
+  VEHICLE_CATEGORIES,
+  vehicleInput,
+} from "./application/vehicle-input";
 export {
   createVehicle,
   getVehicle,

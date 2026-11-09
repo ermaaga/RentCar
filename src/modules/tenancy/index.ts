@@ -9,3 +9,5 @@ export {
   setTenantStatus,
 } from "./infrastructure/lifecycle";
 export type { TenantDetail } from "./infrastructure/lifecycle";
+export { getPublicTenantSettings } from "./infrastructure/public-profile";
+export type { PublicTenantSettings } from "./infrastructure/public-profile";

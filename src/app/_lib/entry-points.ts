@@ -21,6 +21,7 @@ export interface EntryPoint {
 const action = (file: string, name: string) => `action:actions/${file}#${name}`;
 
 const LOGOUT = "only clears the realm cookie and its own session row";
+const PUBLIC_SITE = "public booking site: customers book without an account (FR-PUB-01)";
 const PUBLIC_AUTH = "sign-in, set-password and reset flows run before a session exists";
 
 export const ENTRY_POINTS: readonly EntryPoint[] = [
@@ -256,6 +257,9 @@ export const ENTRY_POINTS: readonly EntryPoint[] = [
     writeClass: "read",
     reason: PUBLIC_AUTH,
   },
+  // Public booking site (BKG-01..05): tenant from the slug only, open to anyone by design.
+  { id: "page:(tenant)/[slug]", realm: "public", writeClass: "read", reason: PUBLIC_SITE },
+  { id: "page:(tenant)/[slug]/vehicles", realm: "public", writeClass: "read", reason: PUBLIC_SITE },
   { id: "page:(tenant)/[slug]/admin", realm: "tenant", minRole: "operator", writeClass: "read" },
   {
     id: "page:(tenant)/[slug]/admin/account",
