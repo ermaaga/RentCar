@@ -42,3 +42,42 @@ describe("smtp mailer: refusals before connecting", () => {
     });
   });
 });
+
+describe("smtp mailer: tenant targets", () => {
+  const target = {
+    host: "smtp.example.com",
+    port: 587,
+    security: "starttls" as const,
+    username: "u",
+    password: "p",
+    fromAddress: "noreply@example.com",
+  };
+  const internal = () => Promise.resolve(["10.1.2.3"]);
+
+  it("refuses a host that resolves to an internal address", async () => {
+    const mailer = createSmtpMailer(base, { resolve: internal });
+    expect(await mailer.sendTenant(target, message)).toEqual({
+      ok: false,
+      category: "blocked_address",
+    });
+    expect(await mailer.checkTenantHost("smtp.example.com", 587)).toEqual({
+      ok: false,
+      category: "blocked_address",
+    });
+  });
+
+  it("accepts a public host on save and skips the guard under the local override", async () => {
+    const pub = createSmtpMailer(base, { resolve: () => Promise.resolve(["93.184.216.34"]) });
+    expect(await pub.checkTenantHost("smtp.example.com", 587)).toEqual({ ok: true });
+    const local = createSmtpMailer({ ...base, allowPrivate: true }, { resolve: internal });
+    expect(await local.checkTenantHost("mailpit", 2525)).toEqual({ ok: true });
+  });
+
+  it("refuses CR or LF in the reply-to header", async () => {
+    const mailer = createSmtpMailer(base, { resolve: () => Promise.resolve(["93.184.216.34"]) });
+    expect(await mailer.sendTenant(target, { ...message, replyTo: "a@b.test\r\nBcc: x" })).toEqual({
+      ok: false,
+      category: "rejected",
+    });
+  });
+});

@@ -60,3 +60,12 @@ export async function peekLink(
   const c = getContainer();
   return peekCredentialLink(c.pool, { realm, token, now: c.clock.now() });
 }
+
+/** Admin-only pages and actions (06-backend-api 5: operators have no settings access). */
+export async function requireTenantAdmin(slug: string) {
+  const ctx = await requireTenantSession(slug);
+  if (ctx.session.role !== "admin") {
+    redirect(`/${ctx.tenant.slug}/admin`);
+  }
+  return ctx;
+}

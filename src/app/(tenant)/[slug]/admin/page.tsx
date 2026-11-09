@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export default async function AdminHomePage(props: { params: Promise<{ slug: string }> }) {
   const t = getTranslator();
   const { slug } = await props.params;
-  const { tenant } = await requireTenantSession(slug);
+  const { tenant, session } = await requireTenantSession(slug);
   const heading = `${t("admin.home.title")} · ${tenant.name}`;
   return (
     <main className="mx-auto max-w-5xl px-4 py-6">
@@ -21,6 +21,14 @@ export default async function AdminHomePage(props: { params: Promise<{ slug: str
       >
         {t("auth.account.link")}
       </Link>
+      {session.role === "admin" ? (
+        <Link
+          href={`/${tenant.slug}/admin/settings/email`}
+          className="mt-4 ml-6 inline-block underline underline-offset-4"
+        >
+          {t("admin.home.emailSettings")}
+        </Link>
+      ) : null}
       <form action={logoutTenantAction.bind(null, tenant.slug)} className="mt-6">
         <button type="submit" className="min-h-12 underline underline-offset-4">
           {t("auth.logout")}

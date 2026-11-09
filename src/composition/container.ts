@@ -17,6 +17,9 @@ export interface Container {
   mailer: Mailer;
   peppers: readonly string[];
   hmacKey: Buffer;
+  /** Field-encryption key for tenant SMTP passwords; `smtpKeys` also accepts previous keys (SR-CRY-02). */
+  smtpKey: Buffer;
+  smtpKeys: readonly Buffer[];
   baseUrl: string;
   secureCookies: boolean;
 }
@@ -25,6 +28,7 @@ let container: Container | undefined;
 
 function build(): Container {
   const cfg = getConfig();
+  const smtpKey = deriveKey(cfg.APP_ENCRYPTION_KEY, "smtp");
   if (!cfg.DATABASE_URL) {
     throw new Error("DATABASE_URL is required to serve requests");
   }
@@ -43,6 +47,8 @@ function build(): Container {
     }),
     peppers: [cfg.PASSWORD_PEPPER],
     hmacKey: deriveKey(cfg.APP_ENCRYPTION_KEY, "ratelimit"),
+    smtpKey,
+    smtpKeys: [smtpKey],
     baseUrl: cfg.APP_BASE_URL.replace(/\/$/, ""),
     secureCookies: cookiesMustBeSecure(cfg.APP_ENV, cfg.APP_BASE_URL),
   };

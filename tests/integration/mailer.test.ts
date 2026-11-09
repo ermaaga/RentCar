@@ -25,7 +25,7 @@ describe.skipIf(!smtpHost || !mailpitApi)("system mailer via Mailpit", () => {
     const to = `admin-${randomUUID().slice(0, 8)}@rentcar.localhost`;
     const mailer = createSmtpMailer({
       host: smtpHost,
-      port: 1025,
+      port: 2525,
       security: "none",
       fromAddress: "noreply@rentcar.localhost",
       fromName: "RentCar",

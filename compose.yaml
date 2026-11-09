@@ -60,8 +60,10 @@ services:
     environment:
       # No reverse DNS on the client: it delays the SMTP greeting by seconds inside Docker.
       MP_SMTP_DISABLE_RDNS: "true"
+      # 2525 is one of the ports a tenant SMTP may use (05-database 5.3), so the same sink serves both.
+      MP_SMTP_BIND_ADDR: "0.0.0.0:2525"
     ports:
-      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:2525:2525"
       - "127.0.0.1:8025:8025"
     restart: unless-stopped
 
@@ -75,7 +77,7 @@ services:
       PASSWORD_PEPPER: ${PASSWORD_PEPPER:-INSECURE_DEV_password_pepper_change_me_32chars}
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
       SYSTEM_SMTP_HOST: ${SYSTEM_SMTP_HOST:-mailpit}
-      SYSTEM_SMTP_PORT: ${SYSTEM_SMTP_PORT:-1025}
+      SYSTEM_SMTP_PORT: ${SYSTEM_SMTP_PORT:-2525}
       SYSTEM_SMTP_SECURITY: ${SYSTEM_SMTP_SECURITY:-none}
       SYSTEM_SMTP_FROM_ADDRESS: ${SYSTEM_SMTP_FROM_ADDRESS:-noreply@rentcar.localhost}
       SYSTEM_ADMIN_EMAIL: ${SYSTEM_ADMIN_EMAIL:-owner@rentcar.localhost}
