@@ -1,6 +1,5 @@
 "use server";
 
-import { headers } from "next/headers";
 import { after } from "next/server";
 
 import { getContainer } from "@/composition/container";
@@ -9,8 +8,9 @@ import { credentialPath, issuePasswordResets, SYSTEM_REALM, tenantRealm } from "
 import type { AuthFormState } from "@/modules/auth/ui/form-state";
 import { renderCredentialEmail } from "@/modules/notifications";
 import { resolveTenantBySlug } from "@/modules/tenancy";
-import { clientIp } from "@/platform/host/client-ip";
 import { hitRateLimit, RATE_LIMITS } from "@/platform/rate-limit/postgres";
+
+import { consume, requestIp, securityEvent, tokenIssued } from "@/app/_lib/security";
 
 // AUT-06/07 (docs/06-backend-api.md 4.2.3): the same answer whether or not an account matches. The
 // lookup, the token and the email run after the response, so timing does not reveal accounts.
@@ -19,59 +19,81 @@ const DONE: AuthFormState = { status: "done", messageKey: "auth.forgot.done" };
 
 type LinkRealm = { kind: "tenant"; slug: string; tenantId: string } | { kind: "system" };
 
-async function sendResets(realm: LinkRealm, identifier: string): Promise<void> {
+/** RL-06: 3 reset requests per account per hour; past it nothing is sent (the answer is unchanged). */
+async function accountAllowed(realm: LinkRealm, identifier: string, ip: string): Promise<boolean> {
   const c = getContainer();
-  const now = c.clock.now();
-  const authRealm = realm.kind === "tenant" ? tenantRealm(realm.tenantId) : SYSTEM_REALM;
-  const accountKey = `${realm.kind === "tenant" ? realm.tenantId : "system"}:${identifier}`;
   const account = await hitRateLimit(c.pool, {
     hmacKey: c.hmacKey,
     rule: RATE_LIMITS.resetAccount,
-    identity: accountKey,
-    now,
+    identity: `${realm.kind === "tenant" ? realm.tenantId : "system"}:${identifier}`,
+    now: c.clock.now(),
   });
   if (!account.allowed) {
+    const reasonCode = RATE_LIMITS.resetAccount.scope;
+    await securityEvent(
+      { event: "ratelimit.exceeded", realm: realm.kind, outcome: "refused", reasonCode },
+      ip,
+    );
+  }
+  return account.allowed;
+}
+
+type Recipient = Awaited<ReturnType<typeof issuePasswordResets>>[number];
+
+async function mailReset(realm: LinkRealm, r: Recipient, ip: string): Promise<void> {
+  const c = getContainer();
+  await tokenIssued({
+    realm: realm.kind,
+    reasonCode: "password_reset",
+    subjectTenantId: realm.kind === "tenant" ? realm.tenantId : null,
+    ip,
+  });
+  const path = credentialPath(
+    realm.kind === "tenant" ? { kind: "tenant", slug: realm.slug } : { kind: "system" },
+    "password_reset",
+    r.token,
+  );
+  const mail = renderCredentialEmail(
+    {
+      purpose: "password_reset",
+      to: r.email,
+      displayName: r.displayName,
+      username: r.username,
+      link: `${c.baseUrl}${path}`,
+    },
+    getTranslator(),
+  );
+  await c.mailer.sendSystem(mail);
+}
+
+async function sendResets(realm: LinkRealm, identifier: string, ip: string): Promise<void> {
+  if (!(await accountAllowed(realm, identifier, ip))) {
     return;
   }
-  const recipients = await issuePasswordResets(c.pool, { realm: authRealm, identifier, now });
-  const t = getTranslator();
+  const c = getContainer();
+  const authRealm = realm.kind === "tenant" ? tenantRealm(realm.tenantId) : SYSTEM_REALM;
+  const recipients = await issuePasswordResets(c.pool, {
+    realm: authRealm,
+    identifier,
+    now: c.clock.now(),
+  });
   for (const r of recipients) {
     // Operators reset through the tenant SMTP, which arrives with tenant mail settings (US-002).
-    if (r.role === "operator") continue;
-    const path = credentialPath(
-      realm.kind === "tenant" ? { kind: "tenant", slug: realm.slug } : { kind: "system" },
-      "password_reset",
-      r.token,
-    );
-    const mail = renderCredentialEmail(
-      {
-        purpose: "password_reset",
-        to: r.email,
-        displayName: r.displayName,
-        username: r.username,
-        link: `${c.baseUrl}${path}`,
-      },
-      t,
-    );
-    await c.mailer.sendSystem(mail);
+    if (r.role !== "operator") {
+      await mailReset(realm, r, ip);
+    }
   }
 }
 
 async function requestReset(realm: LinkRealm | null, form: FormData): Promise<AuthFormState> {
   const raw = form.get("identifier");
   const identifier = typeof raw === "string" ? raw.trim().toLowerCase().slice(0, 254) : "";
-  const c = getContainer();
-  const ip = await hitRateLimit(c.pool, {
-    hmacKey: c.hmacKey,
-    rule: RATE_LIMITS.resetIp,
-    identity: clientIp(await headers()),
-    now: c.clock.now(),
-  });
-  if (!ip.allowed) {
+  const ip = await requestIp();
+  if (!(await consume(RATE_LIMITS.resetIp, ip, realm?.kind ?? "tenant"))) {
     return { status: "error", messageKey: "auth.login.throttled" };
   }
   if (realm && identifier.length > 0) {
-    after(() => sendResets(realm, identifier));
+    after(() => sendResets(realm, identifier, ip));
   }
   return DONE;
 }

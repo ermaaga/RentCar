@@ -15,6 +15,9 @@ import {
 } from "@/modules/tenancy";
 import type { ConsoleActionState } from "@/modules/tenancy/ui/console-action-form";
 import type { CreateTenantState } from "@/modules/tenancy/ui/form-state";
+import { RATE_LIMITS } from "@/platform/rate-limit/postgres";
+
+import { consume, tokenIssued } from "@/app/_lib/security";
 
 // TEN-03 entry point: parse the console form, provision in one system transaction, then await the
 // activation email through the system SMTP (BE-D6). The token exists only in memory here.
@@ -51,6 +54,15 @@ function formToInput(form: FormData): Record<string, unknown> {
   return input;
 }
 
+function provisionError(code: string): CreateTenantState {
+  const e = PROVISION_ERRORS[code] ?? PROVISION_ERRORS.SLUG_INVALID;
+  return {
+    status: "error",
+    messageKey: e?.key ?? "system.newTenant.formInvalid",
+    fields: [e?.field ?? ""],
+  };
+}
+
 export async function createTenantAction(
   _: CreateTenantState,
   form: FormData,
@@ -67,13 +79,14 @@ export async function createTenantAction(
     now: c.clock.now(),
   });
   if (!result.ok) {
-    const e = PROVISION_ERRORS[result.code] ?? PROVISION_ERRORS.SLUG_INVALID;
-    return {
-      status: "error",
-      messageKey: e?.key ?? "system.newTenant.formInvalid",
-      fields: [e?.field ?? ""],
-    };
+    return provisionError(result.code);
   }
+  await tokenIssued({
+    realm: "system",
+    reasonCode: "activation",
+    actorId: session.userId,
+    subjectTenantId: result.tenantId,
+  });
   const mail = renderCredentialEmail(
     {
       purpose: "activation",
@@ -140,6 +153,10 @@ export async function renewSubscriptionAction(
 
 export async function adminAccessLinkAction(slug: string): Promise<ConsoleActionState> {
   const session = await requireSystemSession();
+  // RL-09: at most 20 credential links per tenant per hour.
+  if (!(await consume(RATE_LIMITS.credentialIssued, `tenant:${slug}`, "system"))) {
+    return { status: "error", messageKey: "tenantDetail.accessLinkThrottled" };
+  }
   const c = getContainer();
   const link = await issueAdminAccessLink(c.pool, {
     slug,
@@ -148,6 +165,7 @@ export async function adminAccessLinkAction(slug: string): Promise<ConsoleAction
   });
   revalidatePath(`/system/tenants/${slug}`);
   if (!link) return { status: "error", messageKey: "tenantDetail.adminNone" };
+  await tokenIssued({ realm: "system", reasonCode: "admin_access", actorId: session.userId });
   const mail = renderCredentialEmail(
     {
       purpose: "activation",

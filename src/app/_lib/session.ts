@@ -5,6 +5,9 @@ import { getContainer } from "@/composition/container";
 import { peekCredentialLink, resolveSession, SYSTEM_REALM, tenantRealm } from "@/modules/auth";
 import { resolveTenantBySlug, type ResolvedTenantRow } from "@/modules/tenancy";
 import { sessionCookie } from "@/platform/http/session-cookie";
+import { RATE_LIMITS } from "@/platform/rate-limit/postgres";
+
+import { consume, requestIp } from "./security";
 
 // Page guards (docs/06-backend-api.md AUT-21): resolve the realm cookie to a session or redirect to
 // the realm's sign-in page. Any failure denies.
@@ -52,11 +55,17 @@ export async function requireTenantSession(slug: string) {
   return { tenant, session };
 }
 
-/** Read-only peek for the set-password pages (never consumes the link). */
+/**
+ * Read-only peek for the set-password pages (never consumes the link). RL-16: 60 peeks per IP per
+ * hour; past it every link reads as invalid, so the page cannot be used to probe tokens.
+ */
 export async function peekLink(
   realm: Parameters<typeof resolveSession>[1]["realm"],
   token: string,
-) {
+): Promise<Awaited<ReturnType<typeof peekCredentialLink>>> {
+  if (!(await consume(RATE_LIMITS.credentialPeekIp, await requestIp(), realm.kind))) {
+    return { state: "invalid" };
+  }
   const c = getContainer();
   return peekCredentialLink(c.pool, { realm, token, now: c.clock.now() });
 }

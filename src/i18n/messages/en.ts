@@ -139,6 +139,7 @@ export const en = {
       "Same person. The old password and all sessions stop working; a new activation link is emailed.",
     accessLinkSent: "A new access link was emailed to the administrator.",
     accessLinkFailed: "The access link could not be emailed. Try again.",
+    accessLinkThrottled: "Too many access links for this business. Try again in an hour.",
     notFound: "Tenant not found.",
   },
   admin: {

@@ -118,7 +118,10 @@ describe.skipIf(!adminUrl || !appUrl)("system realm: login and sessions", () => 
     try {
       const foreign = tenantRealm("00000000-0000-4000-8000-000000000000");
       expect((await peekCredentialLink(app, { realm: foreign, token, now })).state).toBe("invalid");
-      expect(await systemLogin(username, "not the password at all")).toEqual({ status: "invalid" });
+      expect(await systemLogin(username, "not the password at all")).toEqual({
+        status: "invalid",
+        reason: "not_active",
+      });
     } finally {
       await cleanup(username);
     }
