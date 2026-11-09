@@ -10,6 +10,8 @@ export interface ResolvedTenantRow {
   slug: string;
   name: string;
   status: "active" | "suspended" | "terminated";
+  /** ISO 4217 currency of the tenant's prices (one per tenant). */
+  currency: string;
 }
 
 /** Unknown, reserved, malformed and deleted slugs all give null (the same generic not-found). */
@@ -22,7 +24,7 @@ export async function resolveTenantBySlug(
   }
   return withSystemTx(pool, async (c) => {
     const res = await c.query<ResolvedTenantRow>(
-      `SELECT id AS "tenantId", slug, name, status FROM tenants
+      `SELECT id AS "tenantId", slug, name, status, currency FROM tenants
         WHERE slug = $1 AND status IN ('active', 'suspended', 'terminated')`,
       [slug],
     );

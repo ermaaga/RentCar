@@ -79,6 +79,16 @@ function form(fields: Record<string, string>): FormData {
 
 const idle = { status: "idle" };
 const operatorFields = { displayName: "X", username: "matrixop", email: "x@example.test" };
+const vehicleFields = {
+  name: "Car",
+  plate: "MX 1",
+  make: "Fiat",
+  model: "Panda",
+  category: "city",
+  fuelType: "petrol",
+  seats: "4",
+  price: "40",
+};
 const smtpFields = {
   host: "smtp.example.com",
   port: "587",
@@ -108,6 +118,15 @@ const INVOKERS: Record<string, (a: Tenant) => unknown[]> = {
     idle,
     form({ displayName: "Changed", email: "changed@example.test" }),
   ],
+  "action:actions/vehicles#createVehicleAction": (a) => [a.slug, idle, form(vehicleFields)],
+  "action:actions/vehicles#updateVehicleAction": (a) => [
+    a.slug,
+    randomUUID(),
+    idle,
+    form(vehicleFields),
+  ],
+  "action:actions/vehicles#setMaintenanceAction": (a) => [a.slug, randomUUID(), true],
+  "action:actions/vehicles#removeVehicleAction": (a) => [a.slug, randomUUID(), "delete"],
   "action:actions/settings#saveSmtpAction": (a) => [a.slug, idle, form(smtpFields)],
   "action:actions/settings#testSmtpAction": (a) => [a.slug],
   "action:actions/tenancy#createTenantAction": () => [idle, form({ name: "x" })],
@@ -153,7 +172,8 @@ async function footprint(tenantId: string): Promise<string> {
           || ':' || (SELECT count(*) FROM tenant_smtp_configs WHERE tenant_id = $1)
           || ':' || (SELECT status FROM tenants WHERE id = $1)
           || ':' || (SELECT string_agg(display_name || email, ',' ORDER BY id) FROM users WHERE tenant_id = $1)
-          || ':' || (SELECT count(*) FROM sessions WHERE tenant_id = $1) AS f`,
+          || ':' || (SELECT count(*) FROM sessions WHERE tenant_id = $1)
+          || ':' || (SELECT count(*) FROM vehicles WHERE tenant_id = $1) AS f`,
     [tenantId],
   );
   return res.rows[0]?.f ?? "";
@@ -177,7 +197,7 @@ beforeAll(async () => {
     PASSWORD_PEPPER: "p".repeat(40),
   });
   admin = new pg.Pool({ connectionString: adminUrl, max: 2 });
-  for (const file of ["auth", "operators", "settings", "tenancy"]) {
+  for (const file of ["auth", "operators", "settings", "tenancy", "vehicles"]) {
     modules[file] = (await import(`../../src/app/actions/${file}.ts`)) as Record<string, Action>;
   }
   a = await tenant();

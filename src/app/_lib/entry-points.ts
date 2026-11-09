@@ -110,6 +110,31 @@ export const ENTRY_POINTS: readonly EntryPoint[] = [
     minRole: "admin",
     writeClass: "write",
   },
+  // Vehicles (FLT-01..04): tenant admin only.
+  {
+    id: action("vehicles", "createVehicleAction"),
+    realm: "tenant",
+    minRole: "admin",
+    writeClass: "write",
+  },
+  {
+    id: action("vehicles", "updateVehicleAction"),
+    realm: "tenant",
+    minRole: "admin",
+    writeClass: "write",
+  },
+  {
+    id: action("vehicles", "setMaintenanceAction"),
+    realm: "tenant",
+    minRole: "admin",
+    writeClass: "write",
+  },
+  {
+    id: action("vehicles", "removeVehicleAction"),
+    realm: "tenant",
+    minRole: "admin",
+    writeClass: "write",
+  },
   // Tenant SMTP (NTF-01/02): tenant admin only.
   {
     id: action("settings", "saveSmtpAction"),
@@ -242,6 +267,18 @@ export const ENTRY_POINTS: readonly EntryPoint[] = [
     id: "page:(tenant)/[slug]/admin/operators",
     realm: "tenant",
     minRole: "admin",
+    writeClass: "read",
+  },
+  {
+    id: "page:(tenant)/[slug]/admin/vehicles",
+    realm: "tenant",
+    minRole: "operator",
+    writeClass: "read",
+  },
+  {
+    id: "page:(tenant)/[slug]/admin/vehicles/[id]",
+    realm: "tenant",
+    minRole: "operator",
     writeClass: "read",
   },
   {
