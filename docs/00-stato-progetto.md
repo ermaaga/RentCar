@@ -13,7 +13,7 @@ APPROVAZIONE_GO_LIVE: IN_ATTESA
 - **Current phase**: 6 — Implementation (M0 closed; M1 in progress)
 - **Next step**: GitHub CI green on PR #1, then owner decides merge and CSM-4 ruleset; CSM-5 spike S1 before M3. Former M0 list (done):  dependency-cruiser/jscpd/knip, Vitest, DB roles + migration runner (replaces migrate stub), ci.yml, security.yml, Playwright, governance, disabled deploy workflows; CSM-5 spike S1 decision needed before M3
 - **Feature in progress**: M1 Platform, auth, tenants (one PR per slice, squash-merged, branch deleted on merge)
-- **Activity in progress**: M1 — next: platform archives (security_event, platform_audit, slug_tombstone, deletion_ledger, export tokens), then M1 application flows (onboarding, activation, systemadmin console)
+- **Activity in progress**: M1 — next: password reset request and change password, operators, tenant suspend/reactivate, subscription edits, jobs endpoint, rate limits RL-05..RL-20, audit/security events on auth paths
 - **Decisions expected from the user**: none until requirements questions
 - **Open risks and issues**: see `docs/pm/raid.md`
 
@@ -26,7 +26,7 @@ APPROVAZIONE_GO_LIVE: IN_ATTESA
 | 3 | Architecture — GATE 2 | done (Option A) | 03-architettura.md, 03b-struttura-codice.md, adr/ |
 | 4 | Detailed design | done | 04…12 |
 | 5 | Questions and approval — GATE 3 | done (approved by user 2026-11-08; security sign-off APPROVED WITH RISKS 2026-11-03) | 13-piano-implementazione.md |
-| 6 | Implementation | in progress: M0 closed (PR #1); M1 data layer merged: tenants, users, sessions, password policy and hashing, login with lockout, subscriptions, credential tokens, outbox, job runs, audit log, tenant settings, SMTP config with encryption, SMTP host guard. Application flows and UI of M1 pending | reviews/, test-reports/ |
+| 6 | Implementation | in progress: M0 closed (PR #1); M1 data layer merged: tenants, users, sessions, password policy and hashing, login with lockout, subscriptions, credential tokens, outbox, job runs, audit log, tenant settings, SMTP config with encryption, SMTP host guard, platform archives, export tokens (PR #3–#19). M1 flows merged (PR #20–#25): effective access and read-only policy, set-password links (issue/peek/redeem), tenant provisioning in the system scope, system realm with bootstrap CLI, system mailer via Mailpit, sign-in/activation pages for both realms and the tenant console (owner creates a tenant, admin activates from the email: E2E green at 3 widths). Remaining M1: reset, change password, operators, suspend/reactivate, subscription edits, jobs, full rate limits and event logging | reviews/, test-reports/ |
 | 7 | Pre-release verification | to do | reviews/, test-reports/ |
 | 8 | Documentation | to do | README, docs/manual/ |
 | 9 | Go-live — GATE 4 | to do | 14-go-live.md |
