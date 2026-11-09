@@ -40,7 +40,9 @@ describe("public search query (W-P1/W-P2 URL)", () => {
       "2026-06-03T09:45",
     ]);
   });
+});
 
+describe("public search query: filters", () => {
   it("accepts categories comma-joined or repeated, and filters", () => {
     const r = parseSearchQuery({
       pickup: "2026-06-01T10:00",
@@ -58,7 +60,9 @@ describe("public search query (W-P1/W-P2 URL)", () => {
       sort: "price-desc",
     });
   });
+});
 
+describe("public search query: refusals and canonical URL", () => {
   it.each([
     [{ return: "2026-06-03T10:00" }, "MISSING_PERIOD"],
     [{ pickup: "2026-06-01 10:00", return: "2026-06-03T10:00" }, "MISSING_PERIOD"],
