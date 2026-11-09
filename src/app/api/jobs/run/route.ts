@@ -38,7 +38,7 @@ async function refuse(ip: string, reasonCode: "rate_limited" | "bad_secret", now
 
 async function authorized(req: NextRequest, now: Date): Promise<boolean> {
   const c = getContainer();
-  const ip = clientIp(req.headers);
+  const ip = clientIp(req.headers, c.trustedProxyCount);
   const limit = { hmacKey: c.hmacKey, rule: RATE_LIMITS.jobAuthFailureIp, identity: ip, now };
   if (await isRateLimited(c.pool, limit)) {
     await refuse(ip, "rate_limited", now);

@@ -27,6 +27,8 @@ export interface Container {
   smtpAllowPrivate: boolean;
   /** SYSTEM_ADMIN_EMAIL: the platform owner's address for platform mail (optional). */
   ownerEmail: string | undefined;
+  /** Trusted hops for the client IP (SR-RL-02); 1 when unset outside production. */
+  trustedProxyCount: number;
 }
 
 let container: Container | undefined;
@@ -58,6 +60,7 @@ function build(): Container {
     fieldKeys: [deriveKey(cfg.APP_ENCRYPTION_KEY, "field-encryption")],
     smtpAllowPrivate: cfg.SMTP_DEV_ALLOW_PRIVATE,
     ownerEmail: cfg.SYSTEM_ADMIN_EMAIL,
+    trustedProxyCount: cfg.TRUSTED_PROXY_COUNT ?? 1,
   };
 }
 
