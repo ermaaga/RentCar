@@ -28,3 +28,10 @@ export function getTranslator(locale: Locale = "en"): (key: MessageKey) => strin
     return value;
   };
 }
+
+/** Replaces `{name}` placeholders; unknown placeholders are left as they are. */
+export function formatMessage(template: string, vars: Record<string, string | number>): string {
+  return template.replace(/\{(\w+)\}/g, (match, name: string) =>
+    name in vars ? String(vars[name]) : match,
+  );
+}

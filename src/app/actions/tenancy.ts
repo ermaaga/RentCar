@@ -1,11 +1,19 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
+
 import { requireSystemSession } from "@/app/_lib/session";
 import { getContainer } from "@/composition/container";
 import { getTranslator, type MessageKey } from "@/i18n";
-import { credentialPath } from "@/modules/auth";
+import { credentialPath, issueAdminAccessLink } from "@/modules/auth";
 import { renderCredentialEmail } from "@/modules/notifications";
-import { createTenantInput, provisionTenant } from "@/modules/tenancy";
+import {
+  changeSubscriptionEnd,
+  createTenantInput,
+  provisionTenant,
+  setTenantStatus,
+} from "@/modules/tenancy";
+import type { ConsoleActionState } from "@/modules/tenancy/ui/console-action-form";
 import type { CreateTenantState } from "@/modules/tenancy/ui/form-state";
 
 // TEN-03 entry point: parse the console form, provision in one system transaction, then await the
@@ -78,4 +86,80 @@ export async function createTenantAction(
   );
   const sent = await c.mailer.sendSystem(mail);
   return { status: "created", slug: result.slug, emailSent: sent.ok };
+}
+
+// Console commands on one tenant (TEN-05/06, SUB-02, AUT-17). Each re-checks the system session.
+
+export async function setTenantStatusAction(
+  slug: string,
+  to: "suspended" | "active",
+): Promise<ConsoleActionState> {
+  const session = await requireSystemSession();
+  const c = getContainer();
+  const result = await setTenantStatus(
+    c.pool,
+    { slug, to },
+    { actorUserId: session.userId, now: c.clock.now() },
+  );
+  revalidatePath(`/system/tenants/${slug}`);
+  if (!result.ok) return { status: "error", messageKey: "tenantDetail.notFound" };
+  return {
+    status: "done",
+    messageKey: result.changed ? "tenantDetail.statusChanged" : "tenantDetail.statusUnchanged",
+  };
+}
+
+const RENEW_ERRORS: Record<string, MessageKey> = {
+  NOT_FOUND: "tenantDetail.notFound",
+  SUBSCRIPTION_INVALID_PERIOD: "tenantDetail.periodInvalid",
+  SUBSCRIPTION_OVERLAP: "tenantDetail.overlap",
+};
+
+export async function renewSubscriptionAction(
+  slug: string,
+  subscriptionId: string,
+  _: ConsoleActionState,
+  form: FormData,
+): Promise<ConsoleActionState> {
+  const session = await requireSystemSession();
+  const endDate = form.get("endDate");
+  if (typeof endDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+    return { status: "error", messageKey: "tenantDetail.periodInvalid" };
+  }
+  const c = getContainer();
+  const result = await changeSubscriptionEnd(
+    c.pool,
+    { slug, subscriptionId, endDate },
+    { actorUserId: session.userId, now: c.clock.now() },
+  );
+  revalidatePath(`/system/tenants/${slug}`);
+  return result.ok
+    ? { status: "done", messageKey: "tenantDetail.renewed" }
+    : { status: "error", messageKey: RENEW_ERRORS[result.code] ?? "tenantDetail.notFound" };
+}
+
+export async function adminAccessLinkAction(slug: string): Promise<ConsoleActionState> {
+  const session = await requireSystemSession();
+  const c = getContainer();
+  const link = await issueAdminAccessLink(c.pool, {
+    slug,
+    actorUserId: session.userId,
+    now: c.clock.now(),
+  });
+  revalidatePath(`/system/tenants/${slug}`);
+  if (!link) return { status: "error", messageKey: "tenantDetail.adminNone" };
+  const mail = renderCredentialEmail(
+    {
+      purpose: "activation",
+      to: link.email,
+      displayName: link.displayName,
+      username: link.username,
+      link: `${c.baseUrl}${credentialPath({ kind: "tenant", slug }, "activation", link.token)}`,
+    },
+    getTranslator(),
+  );
+  const sent = await c.mailer.sendSystem(mail);
+  return sent.ok
+    ? { status: "done", messageKey: "tenantDetail.accessLinkSent" }
+    : { status: "error", messageKey: "tenantDetail.accessLinkFailed" };
 }

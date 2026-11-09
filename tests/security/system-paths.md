@@ -10,3 +10,5 @@ for each new caller; the security review checks that none of them reads tenant c
 | `src/modules/tenancy/infrastructure/queries.ts` `listTenants` | TEN-09 console list (tenant, admin status, subscription end) | none |
 | `src/modules/auth/infrastructure/realm-tx.ts` `withRealmTx` (system realm) | system login, sessions, systemadmin links | sessions, users, credential_tokens |
 | `scripts/create-systemadmin.ts` | UC-AUT-20 bootstrap | users, credential_tokens |
+| `src/modules/tenancy/infrastructure/lifecycle.ts` `setTenantStatus`, `changeSubscriptionEnd`, `getTenantDetail` | TEN-05/06, SUB-02, TEN-10 | tenants, sessions, subscriptions, platform_audit |
+| `src/modules/auth/infrastructure/admin-access.ts` `issueAdminAccessLink` | AUT-17 | users, sessions, credential_tokens, platform_audit, audit_log |

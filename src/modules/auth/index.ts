@@ -7,3 +7,4 @@ export {
   redeemCredentialLink,
 } from "./infrastructure/credential-links";
 export { issuePasswordResets } from "./infrastructure/password-reset";
+export { issueAdminAccessLink } from "./infrastructure/admin-access";

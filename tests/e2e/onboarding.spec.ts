@@ -134,3 +134,29 @@ test("the console requires a session and unknown tenants are a plain 404", async
   const res = await page.goto("/no-such-tenant/admin/login");
   expect(res?.status()).toBe(404);
 });
+
+test("owner suspends, reactivates, renews and re-sends the admin access link", async ({
+  page,
+}, info) => {
+  const slug = `e2l-${info.project.name}-${Date.now().toString(36)}`.slice(0, 40);
+  const email = `${slug}@rentcar.localhost`;
+  await signInOwner(page);
+  await createTenant(page, slug, email);
+  await page.goto("/system");
+  await page.getByRole("link", { name: `Rent ${slug}` }).click();
+  await expect(page.getByRole("heading", { level: 1, name: `Rent ${slug}` })).toBeVisible();
+  await expectAccessible(page);
+
+  await page.getByRole("button", { name: "Suspend tenant" }).click();
+  await expect(page.getByRole("button", { name: "Reactivate tenant" })).toBeVisible();
+  await page.getByRole("button", { name: "Reactivate tenant" }).click();
+  await expect(page.getByRole("button", { name: "Suspend tenant" })).toBeVisible();
+
+  await page.getByLabel("New end date").fill("2100-06-30");
+  await page.getByRole("button", { name: "Save end date" }).click();
+  await expect(page.getByText("2026-01-01 – 2100-06-30")).toBeVisible();
+
+  await page.getByRole("button", { name: "Send a new access link" }).click();
+  await expect(page.getByText("A new access link was emailed to the administrator.")).toBeVisible();
+  expect(await mailedLink(page, email, "activate")).toContain("/admin/activate?token=");
+});
