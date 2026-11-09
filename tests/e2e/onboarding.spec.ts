@@ -206,9 +206,9 @@ test("admin saves email settings and manages an operator", async ({ page }, info
   await expect(page.getByRole("heading", { level: 1, name: "Operators" })).toBeVisible();
   await expect(page.getByText("0 of 2 operators")).toBeVisible();
   await expectAccessible(page);
-  await page.getByLabel("Name").fill("Sara Bianchi");
+  await page.getByLabel("Name", { exact: true }).fill("Sara Bianchi");
   await page.getByLabel("Username", { exact: true }).fill("sara");
-  await page.getByLabel("Email").fill(`sara-${slug}@rentcar.localhost`);
+  await page.getByLabel("Email", { exact: true }).fill(`sara-${slug}@rentcar.localhost`);
   await page.getByRole("button", { name: "Add operator" }).click();
   await expect(page.getByRole("main").getByRole("alert")).toContainText("couldn't be sent");
   await expect(page.getByText("Activation not delivered")).toBeVisible();
