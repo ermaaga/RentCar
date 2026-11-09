@@ -201,8 +201,10 @@ test("admin saves email settings and manages an operator", async ({ page }, info
   await expect(page.getByRole("main").getByRole("status")).toContainText("Email settings saved");
 
   await page.goto(`/${slug}/admin`);
+  // On failure these print the URL and the page text that were received instead.
+  await expect(page).toHaveURL(new RegExp(`/${slug}/admin$`));
+  await expect(page.locator("body")).toContainText("Operators");
   await page.getByRole("link", { name: "Operators" }).click();
-  // On failure this prints the page text that was received instead.
   await expect(page.locator("body")).toContainText("0 of 2 operators");
   await expect(page.getByRole("heading", { level: 1, name: "Operators" })).toBeVisible();
   await expectAccessible(page);
