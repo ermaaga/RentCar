@@ -2,6 +2,7 @@ import type pg from "pg";
 
 import { withTenantTx } from "../../../platform/db/tenant-tx";
 import { parseLocal } from "../domain/local-time";
+import { applyOfferFilter, type Offer } from "../domain/offers";
 import { checkPeriod, type PeriodError } from "../domain/period-rules";
 import { price } from "../domain/pricing";
 
@@ -19,20 +20,8 @@ export interface SearchInput {
   sort?: "price-asc" | "price-desc" | undefined;
 }
 
-interface OfferedVehicle {
-  id: string;
-  name: string;
-  make: string;
-  model: string;
-  category: string;
-  fuelType: string;
-  seats: number;
-  billedDays: number;
-  totalMinor: number;
-}
-
 export type SearchResult =
-  | { ok: true; items: OfferedVehicle[]; timeZone: string }
+  | { ok: true; items: Offer[]; billedDays: number; timeZone: string }
   | { ok: false; code: PeriodError | "INVALID_LOCAL_TIME" };
 
 interface Settings {
@@ -92,13 +81,6 @@ async function freeVehicles(
   return res.rows;
 }
 
-function sortOffers(items: OfferedVehicle[], sort: SearchInput["sort"]): OfferedVehicle[] {
-  const dir = sort === "price-desc" ? -1 : 1;
-  return [...items].sort(
-    (a, b) => dir * (a.totalMinor - b.totalMinor) || a.name.localeCompare(b.name, "en"),
-  );
-}
-
 export async function searchAvailability(
   pool: pg.Pool,
   input: SearchInput,
@@ -128,6 +110,11 @@ export async function searchAvailability(
       seats: v.seats,
       ...price({ start, end }, Number(v.daily_price_minor), s.time_zone),
     }));
-    return { ok: true, items: sortOffers(items, input.sort), timeZone: s.time_zone };
+    return {
+      ok: true,
+      items: applyOfferFilter(items, { sort: input.sort ?? "price-asc", category: [] }),
+      billedDays: period.billedDays,
+      timeZone: s.time_zone,
+    };
   });
 }

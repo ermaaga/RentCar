@@ -64,3 +64,19 @@ export function localDayNumber(instant: Date, timeZone: string): number {
   const p = wallClock(instant, timeZone);
   return Math.round(Date.UTC(p.year, p.month - 1, p.day) / 86_400_000);
 }
+
+const pad = (n: number) => String(n).padStart(2, "0");
+
+/** Instant -> "2026-06-01T10:00" wall-clock time in `timeZone` (minutes, seconds dropped). */
+export function formatLocal(instant: Date, timeZone: string): string {
+  const p = wallClock(instant, timeZone);
+  return `${String(p.year)}-${pad(p.month)}-${pad(p.day)}T${pad(p.hour)}:${pad(p.minute)}`;
+}
+
+/** Adds whole calendar days to the date part of a local date-time string (time kept as is). */
+export function addLocalDays(value: string, days: number): string {
+  const m = LOCAL.exec(value);
+  if (!m) return value;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + days));
+  return `${d.toISOString().slice(0, 10)}T${m[4] ?? "00"}:${m[5] ?? "00"}`;
+}
