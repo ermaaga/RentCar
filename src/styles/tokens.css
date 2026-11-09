@@ -5,6 +5,7 @@
   --muted-foreground: #4a5160;
   --primary: #1d4ed8;
   --primary-foreground: #ffffff;
+  --danger: #b42318;
   --border: #868c99; /* 3.4:1 on background (WCAG 1.4.11) */
   --focus: #1d4ed8;
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -20,6 +21,7 @@
     --muted-foreground: #b4bac7;
     --primary: #7aa2ff;
     --primary-foreground: #0f1218;
+    --danger: #ff8a80;
     --border: #646b7c; /* 3.5:1 on background (WCAG 1.4.11) */
     --focus: #7aa2ff;
   }
@@ -31,6 +33,7 @@
   --muted-foreground: #b4bac7;
   --primary: #7aa2ff;
   --primary-foreground: #0f1218;
+  --danger: #ff8a80;
   --border: #646b7c; /* 3.5:1 on background (WCAG 1.4.11) */
   --focus: #7aa2ff;
 }

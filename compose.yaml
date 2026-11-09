@@ -47,6 +47,8 @@ services:
     command: ["node", "dist-scripts/seed.mjs"]
     environment:
       APP_ENV: local
+      DATABASE_URL: ${DATABASE_URL:-postgres://rentcar_app:INSECURE_DEV_app_role@postgres:5432/rentcar}
+      PASSWORD_PEPPER: ${PASSWORD_PEPPER:-INSECURE_DEV_password_pepper_change_me_32chars}
     depends_on:
       migrate:
         condition: service_completed_successfully

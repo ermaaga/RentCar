@@ -23,7 +23,7 @@
     "dead-code": "knip",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "build:scripts": "esbuild scripts/migrate.ts --bundle --platform=node --format=esm --target=node22 --external:pg-native --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\" --outfile=dist-scripts/migrate.mjs && esbuild scripts/seed.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist-scripts/seed.mjs && esbuild scripts/create-systemadmin.ts --bundle --platform=node --format=esm --target=node22 --external:pg-native --external:@node-rs/argon2 --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\" --outfile=dist-scripts/create-systemadmin.mjs",
+    "build:scripts": "esbuild scripts/migrate.ts --bundle --platform=node --format=esm --target=node22 --external:pg-native --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\" --outfile=dist-scripts/migrate.mjs && esbuild scripts/seed.ts --bundle --platform=node --format=esm --target=node22 --external:pg-native --external:@node-rs/argon2 --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\" --outfile=dist-scripts/seed.mjs && esbuild scripts/create-systemadmin.ts --bundle --platform=node --format=esm --target=node22 --external:pg-native --external:@node-rs/argon2 --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\" --outfile=dist-scripts/create-systemadmin.mjs",
     "test:integration": "vitest run tests/integration",
     "test:e2e": "playwright test -c tests/e2e/playwright.config.ts"
   },
