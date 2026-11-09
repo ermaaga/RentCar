@@ -11,6 +11,7 @@ import {
 } from "../domain/credential-policy";
 import { checkPassword } from "../domain/password-policy";
 import { realmTenantId, type Realm } from "../domain/realm";
+import { enqueueAccountNotice } from "./account-notice";
 import { withRealmTx } from "./realm-tx";
 import { insertSession } from "./sessions";
 
@@ -203,6 +204,13 @@ async function applyRedeem(
   }
   if (!(await setPassword(client, used.userId, hash, input.now))) {
     throw new RedeemRefused();
+  }
+  if (used.purpose === "password_reset") {
+    await enqueueAccountNotice(client, {
+      userId: used.userId,
+      template: "notice.password_reset_completed",
+      now: input.now,
+    });
   }
   if (!startsSession(used.purpose)) {
     return { status: "ok", purpose: used.purpose };

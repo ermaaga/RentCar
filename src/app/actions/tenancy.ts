@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { tenantActivationMail } from "@/app/_lib/credential-mail";
+import { dispatchAfterResponse } from "@/app/_lib/outbox";
 import { consume, tokenIssued } from "@/app/_lib/security";
 import { requireSystemSession } from "@/app/_lib/session";
 import { getContainer } from "@/composition/container";
@@ -157,6 +158,7 @@ export async function adminAccessLinkAction(slug: string): Promise<ConsoleAction
   revalidatePath(`/system/tenants/${slug}`);
   if (!link) return { status: "error", messageKey: "tenantDetail.adminNone" };
   await tokenIssued({ realm: "system", reasonCode: "admin_access", actorId: session.userId });
+  dispatchAfterResponse({ kind: "tenant", tenantId: link.tenantId });
   const sent = await c.mailer.sendSystem(tenantActivationMail(slug, link));
   return sent.ok
     ? { status: "done", messageKey: "tenantDetail.accessLinkSent" }

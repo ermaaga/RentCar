@@ -1,5 +1,11 @@
 import type pg from "pg";
 
+import {
+  dispatchDue,
+  failStaleCredentialRows,
+  type OutboxDeps,
+  type OutboxScope,
+} from "../../notifications";
 import { getEffectiveAccess, localDate } from "../../subscriptions";
 import { dayKey, expiryKey, hourKey, type JobCounts, type JobName } from "../domain/catalogue";
 
@@ -19,10 +25,16 @@ export interface JobEvent {
   fields: Record<string, string | number>;
 }
 
+/** Sending dependencies for mail jobs; absent in runs that must not send (then mail jobs only tidy). */
+export type JobMail = Omit<OutboxDeps, "pool">;
+
 interface JobContext {
+  /** For jobs that open their own short transactions (the outbox sends with no transaction open). */
+  pool: pg.Pool;
   now: Date;
   periodKey: string;
   emit(e: JobEvent): void;
+  mail?: JobMail | undefined;
 }
 
 interface PlatformJob {
@@ -95,6 +107,31 @@ const subscriptionExpiryNotice: TenantJob = {
   },
 };
 
+/** Dispatches due outbox rows of one scope and fails stale credential rows (8.2). */
+async function outboxStep(ctx: JobContext, scope: OutboxScope): Promise<JobCounts> {
+  const stale = await failStaleCredentialRows(ctx.pool, scope, ctx.now);
+  if (!ctx.mail) {
+    return { processed: stale, changed: stale };
+  }
+  const sent = await dispatchDue({ pool: ctx.pool, ...ctx.mail }, scope, ctx.now, 50);
+  const processed = stale + sent.sent + sent.failed + sent.abandoned;
+  return { processed, changed: stale + sent.sent + sent.abandoned };
+}
+
+const outboxTenant: TenantJob = {
+  name: "email_outbox_dispatch",
+  scope: "tenant",
+  periods: (_c, now) => Promise.resolve([hourKey(now)]),
+  run: (_c, ctx, tenant) => outboxStep(ctx, { kind: "tenant", tenantId: tenant.id }),
+};
+
+const outboxPlatform: PlatformJob = {
+  name: "email_outbox_dispatch",
+  scope: "platform",
+  periods: (now) => [hourKey(now)],
+  run: (_c, ctx) => outboxStep(ctx, { kind: "platform" }),
+};
+
 const retentionHourly: PlatformJob = {
   name: "retention_hourly",
   scope: "platform",
@@ -129,6 +166,8 @@ const retentionDaily: PlatformJob = {
 
 /** Registry order is execution order. */
 export const JOB_DEFINITIONS: readonly JobDefinition[] = [
+  outboxTenant,
+  outboxPlatform,
   subscriptionExpiryNotice,
   retentionHourly,
   retentionDaily,

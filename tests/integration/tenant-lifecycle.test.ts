@@ -108,7 +108,9 @@ describe.skipIf(!adminUrl || !appUrl)("tenant lifecycle: subscription and admin 
       ),
     ).toEqual({ ok: false, code: "SUBSCRIPTION_INVALID_PERIOD" });
   });
+});
 
+describe.skipIf(!adminUrl || !appUrl)("admin access link", () => {
   it("a new access link clears the password, ends sessions and is a live activation link", async () => {
     const ctx = { actorUserId: await actor(), now };
     const t = await activeTenant(ctx.actorUserId);
@@ -122,5 +124,12 @@ describe.skipIf(!adminUrl || !appUrl)("tenant lifecycle: subscription and admin 
     expect((await getTenantDetail(app, t.slug))?.admin?.status).toBe("pending");
     const peek = await peekCredentialLink(app, { realm: t.realm, token: link?.token ?? "", now });
     expect(peek.state).toBe("valid");
+    const notice = await admin.query<{ template: string; recipient: string }>(
+      "SELECT template, recipient FROM email_log WHERE tenant_id = $1 AND category = 'transactional'",
+      [t.tenantId],
+    );
+    expect(notice.rows).toEqual([
+      { template: "notice.admin_access_changed", recipient: "mario@rent.test" },
+    ]);
   });
 });

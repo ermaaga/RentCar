@@ -5,6 +5,7 @@ import { hashToken } from "../../../platform/crypto/token";
 import { checkPassword } from "../domain/password-policy";
 import type { Realm } from "../domain/realm";
 import { retryAfterSeconds } from "../domain/throttle-policy";
+import { enqueueAccountNotice } from "./account-notice";
 import { withRealmTx } from "./realm-tx";
 import { insertSession } from "./sessions";
 import { isThrottled, loginKey, recordFailure } from "./throttle";
@@ -58,6 +59,7 @@ async function rotate(pool: pg.Pool, input: ChangePasswordInput, userId: string,
       [userId, hash, input.now],
     );
     await c.query("DELETE FROM sessions WHERE user_id = $1", [userId]);
+    await enqueueAccountNotice(c, { userId, template: "notice.password_changed", now: input.now });
     return insertSession(c, input.realm, userId, input.now);
   });
 }

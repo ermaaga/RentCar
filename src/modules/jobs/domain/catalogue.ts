@@ -2,6 +2,7 @@
 // every invocation in the same hour or day agrees on the period, whatever host runs it.
 
 export const JOB_NAMES = [
+  "email_outbox_dispatch",
   "subscription_expiry_notice",
   "retention_hourly",
   "retention_daily",

@@ -3,6 +3,7 @@ import { performance } from "node:perf_hooks";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { getContainer } from "@/composition/container";
+import { getTranslator } from "@/i18n";
 import { runDueJobs, runRequest, type RunRequest } from "@/modules/jobs";
 import { bearerMatches } from "@/platform/crypto/bearer";
 import { clientIp } from "@/platform/host/client-ip";
@@ -75,6 +76,7 @@ async function run(request: RunRequest): Promise<NextResponse> {
       now: c.clock.now(),
       ...request,
       budgetMs: c.jobsBudgetMs,
+      mail: { mailer: c.mailer, fieldKeys: c.fieldKeys, t: getTranslator() },
       elapsedMs: () => performance.now() - started,
       onEvent: (e) => {
         logger.info({ event: e.event, ...e.fields }, e.event);

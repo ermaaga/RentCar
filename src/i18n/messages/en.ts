@@ -162,6 +162,26 @@ export const en = {
       ignore:
         "If you did not expect this email, you can ignore it. Nothing changes until the link is used.",
     },
+    notice: {
+      passwordChanged: {
+        subject: "Your RentCar password was changed",
+        body: "Hello {name}, the password of your account was changed and your other devices were signed out.",
+      },
+      passwordResetCompleted: {
+        subject: "Your RentCar password was reset",
+        body: "Hello {name}, the password of your account was reset with an emailed link.",
+      },
+      adminAccessChanged: {
+        subject: "Your RentCar administrator access was reset",
+        body: "Hello {name}, the platform owner reset the access to your administrator account. A new set-password link was sent to the account's email address.",
+      },
+      emailChanged: {
+        subject: "The email of your RentCar account was changed",
+        body: "Hello {name}, the email address of your account was changed by your administrator. From now on, emails for this account go to the new address.",
+      },
+      notYou:
+        "If you did not expect this, contact your administrator or the platform owner at once.",
+    },
     smtpTest: {
       subject: "RentCar test email",
       body: "Your email settings work: this message was sent through your own mail server.",

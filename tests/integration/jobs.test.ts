@@ -145,14 +145,18 @@ describe.skipIf(!adminUrl || !appUrl)("subscription_expiry_notice", () => {
     expect(await runsFor(t.id)).toEqual([
       { job: "subscription_expiry_notice", status: "succeeded", attempt: 1, error: null },
     ]);
-    const again = await runDueJobs(app, options(now, { tenantSlug: t.slug }));
+    const again = await runDueJobs(
+      app,
+      options(now, { jobs: ["subscription_expiry_notice"], tenantSlug: t.slug }),
+    );
     expect(again.counts).toMatchObject({ succeeded: 0, alreadyDone: 1 });
   });
 
   it("does nothing for a subscription that is still running", async () => {
     const t = await tenantWithSubscription("2001-12-31");
     const now = new Date("2001-03-01T10:00:00Z");
-    const result = await runDueJobs(app, options(now, { tenantSlug: t.slug }));
+    const only = { jobs: ["subscription_expiry_notice"] as const, tenantSlug: t.slug };
+    const result = await runDueJobs(app, options(now, only));
     expect(result.counts.succeeded).toBe(0);
     expect(await runsFor(t.id)).toEqual([]);
   });
