@@ -21,14 +21,19 @@ export const M1_ABUSE_CASES: AbuseCase[] = [
   {
     id: "ABU-M1-01",
     status: "partial",
-    evidence: [E2E, I("jobs-endpoint")],
-    gap: "no route registry yet, so no generated matrix over every route",
+    evidence: [
+      I("access-matrix"),
+      "tests/security/route-registry.test.ts",
+      I("jobs-endpoint"),
+      E2E,
+    ],
+    gap: "actions and the job route by behaviour; pages only by a static guard check",
   },
   {
     id: "ABU-M1-02",
     status: "partial",
-    evidence: [I("operators"), I("system-realm")],
-    gap: "operator on admin pages and admin on /system covered by guards, not by a matrix test",
+    evidence: [I("access-matrix"), "tests/security/route-registry.test.ts"],
+    gap: "all protected actions by behaviour (operator, other tenant, tenant admin on /system); pages statically",
   },
   {
     id: "ABU-M1-03",
