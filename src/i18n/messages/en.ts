@@ -182,6 +182,14 @@ export const en = {
       notYou:
         "If you did not expect this, contact your administrator or the platform owner at once.",
     },
+    renewal: {
+      ownerSubject: "Subscription of {tenant} ends on {date}",
+      ownerBody:
+        "The subscription of {tenant} ({slug}) ends on {date}. Renew it from the platform console.",
+      adminSubject: "Your RentCar subscription ends on {date}",
+      adminBody:
+        "Hello, the subscription of {tenant} ends on {date}. After that date bookings stay open for 7 more days, then the site becomes read-only. Contact the platform owner to renew.",
+    },
     smtpTest: {
       subject: "RentCar test email",
       body: "Your email settings work: this message was sent through your own mail server.",

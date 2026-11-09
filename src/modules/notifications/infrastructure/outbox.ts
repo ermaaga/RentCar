@@ -5,7 +5,9 @@ import type { MessageKey } from "../../../i18n";
 import { withSystemTx } from "../../../platform/db/system-tx";
 import { withTenantTx } from "../../../platform/db/tenant-tx";
 import type { Mailer, SendResult } from "../../../platform/mailer/port";
-import { isNoticeTemplate, renderNotice, type NoticeTemplate } from "../application/notice-email";
+import type { NoticeTemplate } from "../application/notice-email";
+import type { RenewalTemplate } from "../application/renewal-email";
+import { renderOutboxRow } from "./outbox-render";
 import { sendTenantMail } from "./tenant-mail";
 
 // Transactional outbox (docs/06-backend-api.md 9.3, 05-database 5.15). A row is enqueued inside the
@@ -19,6 +21,37 @@ const BACKOFF_MS = [5, 30, 120, 360, 1440].map((minutes) => minutes * 60_000);
 const LOCK_MS = 60_000;
 const CREDENTIAL_UNDELIVERED_MS = 15 * 60_000;
 
+export interface EmailEnqueue {
+  tenantId: string | null;
+  channel: MailChannel;
+  template: NoticeTemplate | RenewalTemplate;
+  related: { type: "user" | "subscription"; id: string };
+  recipient: string;
+  now: Date;
+}
+
+/** Inserts a pending transactional row in the caller's transaction (same commit as the change). */
+export async function enqueueEmail(c: pg.ClientBase, input: EmailEnqueue): Promise<string> {
+  const id = randomUUID();
+  await c.query(
+    `INSERT INTO email_log (id, tenant_id, channel, category, template, related_type, related_id,
+                            recipient, status, attempts, max_attempts, next_attempt_at, created_at)
+     VALUES ($1, $2, $3, 'transactional', $4, $5, $6, $7, 'pending', 0, $8, $9, $9)`,
+    [
+      id,
+      input.tenantId,
+      input.channel,
+      input.template,
+      input.related.type,
+      input.related.id,
+      input.recipient,
+      BACKOFF_MS.length,
+      input.now,
+    ],
+  );
+  return id;
+}
+
 export interface NoticeEnqueue {
   tenantId: string | null;
   channel: MailChannel;
@@ -28,25 +61,10 @@ export interface NoticeEnqueue {
   now: Date;
 }
 
-/** Inserts a pending transactional row in the caller's transaction (same commit as the change). */
-export async function enqueueNotice(c: pg.ClientBase, input: NoticeEnqueue): Promise<string> {
-  const id = randomUUID();
-  await c.query(
-    `INSERT INTO email_log (id, tenant_id, channel, category, template, related_type, related_id,
-                            recipient, status, attempts, max_attempts, next_attempt_at, created_at)
-     VALUES ($1, $2, $3, 'transactional', $4, 'user', $5, $6, 'pending', 0, $7, $8, $8)`,
-    [
-      id,
-      input.tenantId,
-      input.channel,
-      input.template,
-      input.userId,
-      input.recipient,
-      BACKOFF_MS.length,
-      input.now,
-    ],
-  );
-  return id;
+/** An account notice (related to the user it is about). */
+export function enqueueNotice(c: pg.ClientBase, input: NoticeEnqueue): Promise<string> {
+  const { userId, ...rest } = input;
+  return enqueueEmail(c, { ...rest, related: { type: "user", id: userId } });
 }
 
 /** Where dispatch runs: one tenant's rows, or the platform rows (tenant_id NULL). */
@@ -68,7 +86,6 @@ interface Claimed {
   recipient: string | null;
   attempts: number;
   max_attempts: number;
-  display_name: string | null;
 }
 
 function inScope<T>(pool: pg.Pool, scope: OutboxScope, fn: (c: pg.PoolClient) => Promise<T>) {
@@ -97,9 +114,7 @@ async function claimDue(
               last_attempt_at = $2
          FROM due WHERE e.id = due.id
        RETURNING e.id, e.tenant_id, e.channel, e.template, e.related_id, e.recipient, e.attempts,
-                 e.max_attempts,
-                 (SELECT u.display_name FROM users u
-                   WHERE u.id = e.related_id AND u.tenant_id IS NOT DISTINCT FROM e.tenant_id) AS display_name`,
+                 e.max_attempts`,
       [
         scope.kind === "tenant" ? scope.tenantId : null,
         now,
@@ -111,19 +126,21 @@ async function claimDue(
   });
 }
 
-async function send(deps: OutboxDeps, row: Claimed): Promise<SendResult> {
-  if (!row.recipient || !row.display_name || !isNoticeTemplate(row.template)) {
-    return { ok: false, category: "unknown" };
+/** Renders in a short read transaction, then sends with no transaction open (9.3 steps 3-5). */
+async function send(
+  deps: OutboxDeps,
+  scope: OutboxScope,
+  row: Claimed,
+): Promise<{ result: SendResult; unusable: boolean }> {
+  const mail = await inScope(deps.pool, scope, (c) => renderOutboxRow(c, row, deps.t));
+  if (!mail) {
+    return { result: { ok: false, category: "unknown" }, unusable: true };
   }
-  const mail = renderNotice(
-    row.template,
-    { to: row.recipient, displayName: row.display_name },
-    deps.t,
-  );
-  if (row.channel === "tenant_smtp" && row.tenant_id) {
-    return sendTenantMail(deps, row.tenant_id, mail);
-  }
-  return deps.mailer.sendSystem(mail);
+  const result =
+    row.channel === "tenant_smtp" && row.tenant_id
+      ? await sendTenantMail(deps, row.tenant_id, mail)
+      : await deps.mailer.sendSystem(mail);
+  return { result, unusable: false };
 }
 
 type Outcome = "sent" | "failed" | "abandoned";
@@ -132,10 +149,9 @@ async function record(
   pool: pg.Pool,
   scope: OutboxScope,
   row: Claimed,
-  sent: { result: SendResult; now: Date },
+  sent: { result: SendResult; unusable: boolean; now: Date },
 ): Promise<Outcome> {
-  const { result, now } = sent;
-  const unusable = !row.recipient || !row.display_name || !isNoticeTemplate(row.template);
+  const { result, unusable, now } = sent;
   const outcome: Outcome = result.ok
     ? "sent"
     : unusable || row.attempts >= row.max_attempts
@@ -170,11 +186,9 @@ export async function dispatchDue(
 ): Promise<DispatchCounts> {
   const counts: DispatchCounts = { sent: 0, failed: 0, abandoned: 0 };
   for (const row of await claimDue(deps.pool, scope, now, limit)) {
-    const result = await send(deps, row).catch((): SendResult => ({
-      ok: false,
-      category: "unknown",
-    }));
-    counts[await record(deps.pool, scope, row, { result, now })] += 1;
+    const failed: SendResult = { ok: false, category: "unknown" };
+    const sent = await send(deps, scope, row).catch(() => ({ result: failed, unusable: false }));
+    counts[await record(deps.pool, scope, row, { ...sent, now })] += 1;
   }
   return counts;
 }

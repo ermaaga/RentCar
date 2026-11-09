@@ -4,6 +4,7 @@
 export const JOB_NAMES = [
   "email_outbox_dispatch",
   "subscription_expiry_notice",
+  "subscription_renewal_reminder",
   "retention_hourly",
   "retention_daily",
 ] as const;
@@ -23,6 +24,11 @@ export function dayKey(now: Date): string {
 /** Expiry key: a new end date (renewal) yields a new key, so a later expiry is noticed again. */
 export function expiryKey(subscriptionId: string, endDate: string): string {
   return `subexp:${subscriptionId}:${endDate}`;
+}
+
+/** Reminder key: one reminder per subscription end date (a renewal gives a new key, 05-database 5.4). */
+export function reminderKey(subscriptionId: string, endDate: string): string {
+  return `sub:${subscriptionId}:${endDate}`;
 }
 
 /** Lock key for pg_try_advisory_xact_lock: one holder per (job, tenant, period). */

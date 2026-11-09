@@ -25,6 +25,8 @@ export interface Container {
   fieldKeys: readonly Buffer[];
   /** Local Mailpit override for SMTP (APP_ENV=local only, checked at boot). */
   smtpAllowPrivate: boolean;
+  /** SYSTEM_ADMIN_EMAIL: the platform owner's address for platform mail (optional). */
+  ownerEmail: string | undefined;
 }
 
 let container: Container | undefined;
@@ -55,6 +57,7 @@ function build(): Container {
     jobsBudgetMs: cfg.JOBS_TIME_BUDGET_MS,
     fieldKeys: [deriveKey(cfg.APP_ENCRYPTION_KEY, "field-encryption")],
     smtpAllowPrivate: cfg.SMTP_DEV_ALLOW_PRIVATE,
+    ownerEmail: cfg.SYSTEM_ADMIN_EMAIL,
   };
 }
 
