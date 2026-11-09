@@ -55,6 +55,9 @@ services:
   mailpit:
     image: axllent/mailpit:v1.21.8@sha256:81370195cd4a0eab9604d17c2617a7525b0486f9365555253b6c5376c6350f1a
     profiles: ["mail"]
+    environment:
+      # No reverse DNS on the client: it delays the SMTP greeting by seconds inside Docker.
+      MP_SMTP_DISABLE_RDNS: "true"
     ports:
       - "127.0.0.1:1025:1025"
       - "127.0.0.1:8025:8025"
@@ -68,6 +71,13 @@ services:
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-INSECURE_DEV_encryption_key_change_me_32chars}
       CRON_SECRET: ${CRON_SECRET:-INSECURE_DEV_cron_secret_change_me_32chars_min}
       PASSWORD_PEPPER: ${PASSWORD_PEPPER:-INSECURE_DEV_password_pepper_change_me_32chars}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
+      SYSTEM_SMTP_HOST: ${SYSTEM_SMTP_HOST:-mailpit}
+      SYSTEM_SMTP_PORT: ${SYSTEM_SMTP_PORT:-1025}
+      SYSTEM_SMTP_SECURITY: ${SYSTEM_SMTP_SECURITY:-none}
+      SYSTEM_SMTP_FROM_ADDRESS: ${SYSTEM_SMTP_FROM_ADDRESS:-noreply@rentcar.localhost}
+      SYSTEM_ADMIN_EMAIL: ${SYSTEM_ADMIN_EMAIL:-owner@rentcar.localhost}
+      SMTP_DEV_ALLOW_PRIVATE: ${SMTP_DEV_ALLOW_PRIVATE:-true}
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:

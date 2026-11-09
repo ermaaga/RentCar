@@ -96,6 +96,13 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U rentcar_admin -d rentcar"
           --health-interval 5s --health-timeout 3s --health-retries 10
+      mailpit:
+        image: axllent/mailpit:v1.21.8@sha256:81370195cd4a0eab9604d17c2617a7525b0486f9365555253b6c5376c6350f1a
+        env:
+          MP_SMTP_DISABLE_RDNS: "true"
+        ports:
+          - 1025:1025
+          - 8025:8025
     env:
       ROLE_MIGRATOR_PASSWORD: INSECURE_DEV_ci_migrator
       ROLE_APP_PASSWORD: INSECURE_DEV_ci_app
@@ -127,6 +134,8 @@ jobs:
           TEST_DATABASE_ADMIN_URL: postgres://rentcar_admin:${{ env.PGPASSWORD }}@127.0.0.1:5432/rentcar
           TEST_DIRECT_DATABASE_URL: postgres://rentcar_migrator:${{ env.ROLE_MIGRATOR_PASSWORD }}@127.0.0.1:5432/rentcar
           TEST_DATABASE_URL: postgres://rentcar_app:${{ env.ROLE_APP_PASSWORD }}@127.0.0.1:5432/rentcar
+          TEST_SMTP_HOST: 127.0.0.1
+          TEST_MAILPIT_API: http://127.0.0.1:8025
         run: pnpm run test:integration
 
   e2e:
