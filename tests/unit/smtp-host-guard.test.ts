@@ -39,9 +39,29 @@ describe("SMTP host guard (EM-01, ABU-M1-19)", () => {
       });
     }
   });
+});
+
+describe("SMTP address classification (SR-SSRF-02)", () => {
+  it.each([
+    "203.0.113.9",
+    "198.51.100.1",
+    "192.0.2.1",
+    "198.18.0.1",
+    "240.0.0.1",
+    "2001:db8::1",
+    "64:ff9b::7f00:1",
+    "2002:7f00:1::1",
+    "2001::1",
+    "100::1",
+    "fec0::1",
+    "ff02::1",
+  ])("refuses the reserved, documentation or embedded-private address %s (SR-SSRF-02)", (ip) => {
+    expect(isNonPublicIp(ip)).toBe(true);
+  });
 
   it("classifies IP literals", () => {
-    expect(isNonPublicIp("203.0.113.9")).toBe(false);
+    expect(isNonPublicIp("8.8.8.8")).toBe(false);
+    expect(isNonPublicIp("64:ff9b::808:808")).toBe(false);
     expect(isNonPublicIp("2606:4700::1111")).toBe(false);
     expect(isNonPublicIp("not-an-ip")).toBe(false);
   });

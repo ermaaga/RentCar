@@ -21,6 +21,10 @@ export interface Container {
   secureCookies: boolean;
   cronSecret: string;
   jobsBudgetMs: number;
+  /** Field encryption keys (SR-CRY-01); the first one encrypts, all of them decrypt. */
+  fieldKeys: readonly Buffer[];
+  /** Local Mailpit override for SMTP (APP_ENV=local only, checked at boot). */
+  smtpAllowPrivate: boolean;
 }
 
 let container: Container | undefined;
@@ -49,6 +53,8 @@ function build(): Container {
     secureCookies: cookiesMustBeSecure(cfg.APP_ENV, cfg.APP_BASE_URL),
     cronSecret: cfg.CRON_SECRET,
     jobsBudgetMs: cfg.JOBS_TIME_BUDGET_MS,
+    fieldKeys: [deriveKey(cfg.APP_ENCRYPTION_KEY, "field-encryption")],
+    smtpAllowPrivate: cfg.SMTP_DEV_ALLOW_PRIVATE,
   };
 }
 

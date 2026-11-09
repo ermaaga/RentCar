@@ -22,6 +22,20 @@ export type SendFailure =
 
 export type SendResult = { ok: true } | { ok: false; category: SendFailure };
 
+/** A tenant's own SMTP server (docs/05-database.md 5.3), password already decrypted. */
+export interface TenantSmtpSettings {
+  host: string;
+  port: number;
+  security: "tls" | "starttls";
+  username: string;
+  password: string;
+  fromAddress: string;
+  fromName?: string | null | undefined;
+  replyTo?: string | null | undefined;
+}
+
 export interface Mailer {
   sendSystem(message: MailMessage): Promise<SendResult>;
+  /** Sends through the tenant's SMTP after the SSRF guard (resolve, validate, connect to the IP). */
+  sendTenant(settings: TenantSmtpSettings, message: MailMessage): Promise<SendResult>;
 }

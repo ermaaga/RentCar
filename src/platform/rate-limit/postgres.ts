@@ -64,6 +64,7 @@ export const RATE_LIMITS = {
   loginIp: { scope: "auth.login_failure.ip", limit: 20, windowMs: 15 * 60_000 },
   loginIpSystem: { scope: "auth.login_failure.ip.system", limit: 10, windowMs: 15 * 60_000 },
   credentialIssued: { scope: "auth.credential_issued", limit: 20, windowMs: HOUR },
+  smtpTest: { scope: "notify.smtp_test", limit: 5, windowMs: HOUR },
   credentialPeekIp: { scope: "auth.credential_peek.ip", limit: 60, windowMs: HOUR },
   jobAuthFailureIp: { scope: "job.auth_failure.ip", limit: 10, windowMs: 60_000 },
 } as const satisfies Record<string, RateLimitRule>;
