@@ -9,6 +9,7 @@ import {
   recordCredentialDelivery,
   reissueOperatorLink,
   setOperatorActive,
+  updateOperator,
 } from "../../src/modules/auth";
 
 // Operators as the runtime role (docs/06-backend-api.md 4.2.5, AUT-12/14/15/16, US-013, US-072).
@@ -153,5 +154,45 @@ describe.skipIf(!adminUrl || !appUrl)("operator isolation", () => {
       code: "NOT_FOUND",
     });
     expect(await reissueOperatorLink(app, { id }, b.ctx)).toEqual({ ok: false, code: "NOT_FOUND" });
+  });
+});
+
+describe.skipIf(!adminUrl || !appUrl)("updateOperator (AUT-13, SR-AUT-10)", () => {
+  it("tells the previous address about an email change, through the tenant channel", async () => {
+    const t = await tenant(2);
+    const created = await createOperator(app, sara(), t.ctx);
+    if (!created.ok) throw new Error(created.code);
+    const id = created.link.operatorId;
+    const edit = { id, displayName: "Sara B.", email: "sara.new@example.test" };
+    expect(await updateOperator(app, edit, t.ctx)).toEqual({ ok: true, emailChanged: true });
+    expect(await updateOperator(app, { ...edit, displayName: "Sara" }, t.ctx)).toEqual({
+      ok: true,
+      emailChanged: false,
+    });
+    const notices = await admin.query<{ template: string; channel: string; recipient: string }>(
+      `SELECT template, channel, recipient FROM email_log
+        WHERE tenant_id = $1 AND category = 'transactional'`,
+      [t.tenantId],
+    );
+    expect(notices.rows).toEqual([
+      { template: "notice.email_changed", channel: "tenant_smtp", recipient: "sara@example.test" },
+    ]);
+    expect((await listOperators(app, t.tenantId, now))[0]).toMatchObject({
+      displayName: "Sara",
+      email: "sara.new@example.test",
+    });
+  });
+
+  it("never edits an admin or another tenant's operator", async () => {
+    const a = await tenant(2);
+    const b = await tenant(2);
+    const created = await createOperator(app, sara(), a.ctx);
+    if (!created.ok) throw new Error(created.code);
+    const edit = { displayName: "X", email: "x@example.test" };
+    const notFound = { ok: false, code: "NOT_FOUND" };
+    expect(await updateOperator(app, { id: a.adminId, ...edit }, a.ctx)).toEqual(notFound);
+    expect(await updateOperator(app, { id: created.link.operatorId, ...edit }, b.ctx)).toEqual(
+      notFound,
+    );
   });
 });

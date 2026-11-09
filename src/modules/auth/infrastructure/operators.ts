@@ -4,21 +4,12 @@ import type pg from "pg";
 import { withTenantTx } from "../../../platform/db/tenant-tx";
 import { localDate } from "../../subscriptions";
 import { tenantRealm } from "../domain/realm";
+import { enqueueAccountNotice } from "./account-notice";
 import { issueCredentialLink } from "./credential-links";
 
 // Operators (docs/06-backend-api.md 4.2.5, AUT-12/14/15/16). Tenant scope only: every query is bound
 // to the tenant transaction and to role = 'operator', so an admin id never matches. The plan limit is
 // checked under a transaction-level advisory lock (US-013: two parallel creates at limit-1 give one).
-
-type OperatorStatus = "pending" | "active" | "deactivated" | "activation_not_delivered";
-
-export interface OperatorRow {
-  id: string;
-  username: string;
-  displayName: string;
-  email: string;
-  status: OperatorStatus;
-}
 
 export interface OperatorUsage {
   used: number;
@@ -34,8 +25,6 @@ export interface IssuedOperatorLink {
   displayName: string;
   username: string;
 }
-
-const UNDELIVERED_AFTER_MS = 15 * 60_000;
 
 async function operatorLimit(c: pg.ClientBase, tenantId: string, now: Date): Promise<number> {
   const tz = await c.query<{ time_zone: string }>("SELECT time_zone FROM tenants WHERE id = $1", [
@@ -78,57 +67,6 @@ export async function operatorUsage(
   return withTenantTx(pool, tenantId, async (c) => ({
     used: await countSeats(c, tenantId),
     max: await operatorLimit(c, tenantId, now),
-  }));
-}
-
-interface ListRow {
-  id: string;
-  username: string;
-  display_name: string;
-  email: string;
-  status: "pending" | "active" | "deactivated";
-  mail_status: string | null;
-  mail_created_at: Date | null;
-}
-
-function derivedStatus(row: ListRow, now: Date): OperatorStatus {
-  if (row.status !== "pending" || !row.mail_status) {
-    return row.status;
-  }
-  const stale =
-    row.mail_status === "pending" &&
-    now.getTime() - (row.mail_created_at?.getTime() ?? 0) > UNDELIVERED_AFTER_MS;
-  return row.mail_status === "failed" || stale ? "activation_not_delivered" : "pending";
-}
-
-/** AUT-16: operators of the tenant with "Activation not delivered" derived from email_log (8.3). */
-export async function listOperators(
-  pool: pg.Pool,
-  tenantId: string,
-  now: Date,
-): Promise<OperatorRow[]> {
-  const res = await withTenantTx(pool, tenantId, (c) =>
-    c.query<ListRow>(
-      `SELECT u.id, u.username, u.display_name, u.email, u.status,
-              m.status AS mail_status, m.created_at AS mail_created_at
-         FROM users u
-         LEFT JOIN LATERAL (
-           SELECT status, created_at FROM email_log
-            WHERE tenant_id = u.tenant_id AND related_type = 'user' AND related_id = u.id
-              AND category = 'credential'
-            ORDER BY created_at DESC LIMIT 1
-         ) m ON true
-        WHERE u.tenant_id = $1 AND u.role = 'operator'
-        ORDER BY (u.status = 'deactivated'), lower(u.display_name), u.id`,
-      [tenantId],
-    ),
-  );
-  return res.rows.map((r) => ({
-    id: r.id,
-    username: r.username,
-    displayName: r.display_name,
-    email: r.email,
-    status: derivedStatus(r, now),
   }));
 }
 
@@ -324,4 +262,40 @@ export async function recordCredentialDelivery(
       ],
     ),
   );
+}
+
+export type UpdateOperatorResult =
+  { ok: true; emailChanged: boolean } | { ok: false; code: "NOT_FOUND" };
+
+/**
+ * AUT-13: name and email of an operator of this tenant (an admin id never matches). When the email
+ * changes, the previous address gets a notice through the outbox, in the same transaction (SR-AUT-10).
+ */
+export async function updateOperator(
+  pool: pg.Pool,
+  input: { id: string; displayName: string; email: string },
+  ctx: { tenantId: string; now: Date },
+): Promise<UpdateOperatorResult> {
+  return withTenantTx(pool, ctx.tenantId, async (c) => {
+    const op = await lockOperator(c, ctx.tenantId, input.id);
+    if (!op) {
+      return { ok: false, code: "NOT_FOUND" };
+    }
+    const emailChanged = op.email.toLowerCase() !== input.email.toLowerCase();
+    await c.query("UPDATE users SET display_name = $2, email = $3, updated_at = $4 WHERE id = $1", [
+      op.id,
+      input.displayName,
+      input.email,
+      ctx.now,
+    ]);
+    if (emailChanged) {
+      await enqueueAccountNotice(c, {
+        userId: op.id,
+        template: "notice.email_changed",
+        recipient: op.email,
+        now: ctx.now,
+      });
+    }
+    return { ok: true, emailChanged };
+  });
 }

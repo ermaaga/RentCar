@@ -12,3 +12,5 @@ export const createOperatorInput = z.object({
     .regex(/^[a-z0-9._-]{3,64}$/),
   email: z.email().max(254),
 });
+
+export const updateOperatorInput = createOperatorInput.pick({ displayName: true, email: true });

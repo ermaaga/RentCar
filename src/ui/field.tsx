@@ -8,13 +8,15 @@ interface FieldProps extends InputHTMLAttributes<HTMLInputElement> {
   error?: string | undefined;
 }
 
-export function Field({ name, label, hint, error, ...input }: FieldProps) {
-  const hintId = hint ? `${name}-hint` : undefined;
-  const errorId = error ? `${name}-error` : undefined;
+export function Field({ name, label, hint, error, id, ...input }: FieldProps) {
+  // `id` defaults to `name`; pass one when the same field repeats on a page (one form per row).
+  const fieldId = id ?? name;
+  const hintId = hint ? `${fieldId}-hint` : undefined;
+  const errorId = error ? `${fieldId}-error` : undefined;
   const describedBy = [hintId, errorId].filter(Boolean).join(" ") || undefined;
   return (
     <div className="flex flex-col gap-1">
-      <label htmlFor={name} className="font-medium">
+      <label htmlFor={fieldId} className="font-medium">
         {label}
       </label>
       {hint ? (
@@ -23,7 +25,7 @@ export function Field({ name, label, hint, error, ...input }: FieldProps) {
         </p>
       ) : null}
       <input
-        id={name}
+        id={fieldId}
         name={name}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy}

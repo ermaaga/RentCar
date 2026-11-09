@@ -206,13 +206,19 @@ test("admin saves email settings and manages an operator", async ({ page }, info
   await expect(page.getByRole("heading", { level: 1, name: "Operators" })).toBeVisible();
   await expect(page.getByText("0 of 2 operators")).toBeVisible();
   await expectAccessible(page);
-  await page.getByLabel("Name", { exact: true }).fill("Sara Bianchi");
-  await page.getByLabel("Username", { exact: true }).fill("sara");
-  await page.getByLabel("Email", { exact: true }).fill(`sara-${slug}@rentcar.localhost`);
-  await page.getByRole("button", { name: "Add operator" }).click();
+  const add = page.getByRole("region", { name: "Add operator" });
+  await add.getByLabel("Name", { exact: true }).fill("Sara Bianchi");
+  await add.getByLabel("Username", { exact: true }).fill("sara");
+  await add.getByLabel("Email", { exact: true }).fill(`sara-${slug}@rentcar.localhost`);
+  await add.getByRole("button", { name: "Add operator" }).click();
   await expect(page.getByRole("main").getByRole("alert")).toContainText("couldn't be sent");
   await expect(page.getByText("Activation not delivered")).toBeVisible();
   await expect(page.getByText("1 of 2 operators")).toBeVisible();
+
+  const row = page.getByRole("listitem");
+  await row.getByLabel("Email", { exact: true }).fill(`sara2-${slug}@rentcar.localhost`);
+  await page.getByRole("button", { name: "Save Sara Bianchi" }).click();
+  await expect(page.getByText("previous email address was told")).toBeVisible();
 
   await page.getByRole("button", { name: "Deactivate Sara Bianchi" }).click();
   await expect(page.getByRole("button", { name: "Reactivate Sara Bianchi" })).toBeVisible();
