@@ -79,6 +79,12 @@ describe.skipIf(!adminUrl || !appUrl)("change password", () => {
     expect(await resolveSession(app, { realm, token: rotated, now })).not.toBeNull();
     expect((await signIn(t, OLD)).status).toBe("invalid");
     expect((await signIn(t, NEW)).status).toBe("ok");
+    // SR-AUT-10: a notice is enqueued in the same transaction, to the account's own address.
+    const notices = await admin.query<{ template: string; channel: string }>(
+      "SELECT template, channel FROM email_log WHERE tenant_id = $1 AND category = 'transactional'",
+      [t],
+    );
+    expect(notices.rows).toEqual([{ template: "notice.password_changed", channel: "system_smtp" }]);
   });
 
   it("refuses a wrong current password, a short new one and a missing session", async () => {

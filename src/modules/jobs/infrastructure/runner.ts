@@ -8,6 +8,7 @@ import {
   JOB_DEFINITIONS,
   type JobDefinition,
   type JobEvent,
+  type JobMail,
   type TenantTarget,
 } from "./definitions";
 
@@ -24,6 +25,8 @@ export interface RunOptions {
   /** Milliseconds since the invocation started (monotonic), for the time budget. */
   elapsedMs: () => number;
   onEvent?: (e: JobEvent) => void;
+  /** Sending dependencies for mail jobs (the route passes the container's mailer). */
+  mail?: JobMail;
   /** Catalogue override for tests; production always uses JOB_DEFINITIONS. */
   definitions?: readonly JobDefinition[];
 }
@@ -115,8 +118,15 @@ async function planJob(
   return steps;
 }
 
-async function work(c: pg.PoolClient, step: Step, options: RunOptions): Promise<JobCounts> {
+async function work(
+  pool: pg.Pool,
+  c: pg.PoolClient,
+  step: Step,
+  options: RunOptions,
+): Promise<JobCounts> {
   const ctx = {
+    pool,
+    mail: options.mail,
     now: options.now,
     periodKey: step.periodKey,
     emit: (e: JobEvent) => options.onEvent?.(e),
@@ -154,7 +164,7 @@ async function claimAndRun(pool: pg.Pool, step: Step, options: RunOptions): Prom
     if (!runRow) {
       return "alreadyDone";
     }
-    const counts = await work(c, step, options);
+    const counts = await work(pool, c, step, options);
     await c.query("UPDATE job_runs SET counts = $2 WHERE id = $1", [
       runRow.id,
       JSON.stringify(counts),

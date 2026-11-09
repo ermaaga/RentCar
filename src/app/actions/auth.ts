@@ -18,6 +18,7 @@ import { resolveTenantBySlug } from "@/modules/tenancy";
 import { sessionCookie, type CookieRealm } from "@/platform/http/session-cookie";
 import { RATE_LIMITS } from "@/platform/rate-limit/postgres";
 
+import { dispatchAfterResponse } from "@/app/_lib/outbox";
 import { consume, limitReached, requestIp, securityEvent } from "@/app/_lib/security";
 
 // Thin auth entry points (docs/06-backend-api.md AUT-01..05): parse the form, call the service,
@@ -47,6 +48,12 @@ function eventScope(realm: AuthRealm) {
 }
 
 type Outcome = "success" | "failure" | "refused";
+
+function outboxScope(realm: AuthRealm) {
+  return realm.kind === "tenant"
+    ? ({ kind: "tenant", tenantId: realm.tenantId } as const)
+    : ({ kind: "platform" } as const);
+}
 
 /** Emitter of security events bound to one realm and request IP. */
 function realmEvents(realm: AuthRealm, ip?: string) {
@@ -168,6 +175,9 @@ async function setPassword(
     return { status: "error", messageKey: "auth.setPassword.invalid" };
   }
   await emit("auth.token.redeemed", "success", { reasonCode: result.purpose });
+  if (result.purpose === "password_reset") {
+    dispatchAfterResponse(outboxScope(realm));
+  }
   if (result.sessionToken) {
     await setSessionCookie(realm.kind, result.sessionToken);
   }
@@ -256,6 +266,7 @@ async function rotatePassword(
       outcome: "success",
       ...eventScope(realm),
     });
+    dispatchAfterResponse(outboxScope(realm));
     await setSessionCookie(cookieRealm, result.sessionToken);
     return { status: "done", messageKey: "auth.account.changed" };
   }

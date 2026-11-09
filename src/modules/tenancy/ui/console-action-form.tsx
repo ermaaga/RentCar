@@ -2,7 +2,7 @@
 
 import { useActionState, type ReactNode } from "react";
 
-import { getTranslator, type MessageKey } from "../../../i18n";
+import { formatMessage, getTranslator, type MessageKey } from "../../../i18n";
 import { Alert } from "../../../ui/alert";
 import { SubmitButton } from "../../../ui/submit-button";
 
@@ -20,16 +20,19 @@ const IDLE: ConsoleActionState = { status: "idle" };
 export function ConsoleActionForm(props: {
   action: ConsoleAction;
   submit: MessageKey;
+  /** Values for `{placeholders}` in the submit label (e.g. the name of the row it acts on). */
+  submitParams?: Record<string, string>;
   hint?: MessageKey;
   children?: ReactNode;
 }) {
   const t = getTranslator();
   const [state, formAction] = useActionState(props.action, IDLE);
+  const label = formatMessage(t(props.submit), props.submitParams ?? {});
   return (
     <form action={formAction} className="flex flex-col gap-3">
       {props.hint ? <p className="text-muted-foreground">{t(props.hint)}</p> : null}
       {props.children}
-      <SubmitButton label={t(props.submit)} pendingLabel={t(props.submit)} />
+      <SubmitButton label={label} pendingLabel={label} />
       {state.status === "idle" ? null : (
         <Alert kind={state.status === "error" ? "error" : "status"}>{t(state.messageKey)}</Alert>
       )}

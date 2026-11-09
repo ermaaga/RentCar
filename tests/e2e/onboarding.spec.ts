@@ -172,3 +172,50 @@ test("owner suspends, reactivates, renews and re-sends the admin access link", a
   await expect(page.getByText("A new access link was emailed to the administrator.")).toBeVisible();
   expect(await mailedLink(page, email, "activate")).toContain("/admin/activate?token=");
 });
+
+/** Owner creates a tenant; its admin activates from the email and lands on the dashboard. */
+async function activatedAdmin(page: Page, slug: string, email: string): Promise<void> {
+  await signInOwner(page);
+  await createTenant(page, slug, email);
+  await page.goto(await mailedLink(page, email, "activate"));
+  await page.getByLabel("New password", { exact: true }).fill(ADMIN_PASSWORD);
+  await page.getByLabel("Repeat the new password").fill(ADMIN_PASSWORD);
+  await page.getByRole("button", { name: "Save password" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: /Dashboard/ })).toBeVisible();
+}
+
+test("admin saves email settings and manages an operator", async ({ page }, info) => {
+  const slug = `e2o-${info.project.name}-${Date.now().toString(36)}`.slice(0, 40);
+  await activatedAdmin(page, slug, `${slug}@rentcar.localhost`);
+
+  // Mailpit does not listen on 587: the settings save (local override) but delivery fails, which
+  // is the "Activation not delivered" path of W-D9.
+  await page.getByRole("link", { name: "Email settings" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Email settings" })).toBeVisible();
+  await expectAccessible(page);
+  await page.getByLabel("Mail server (SMTP host)").fill("mailpit");
+  await page.getByLabel("Username", { exact: true }).fill("mailer");
+  await page.getByLabel("Password", { exact: true }).fill("smtp password");
+  await page.getByLabel("Sender address").fill("noreply@rentcar.localhost");
+  await page.getByRole("button", { name: "Save settings" }).click();
+  await expect(page.getByRole("main").getByRole("status")).toContainText("Email settings saved");
+
+  // Stay on the host of the emailed link (APP_BASE_URL): the session cookie belongs to it.
+  await page.getByRole("link", { name: "Dashboard" }).click();
+  await page.getByRole("link", { name: "Operators" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Operators" })).toBeVisible();
+  await expect(page.getByText("0 of 2 operators")).toBeVisible();
+  await expectAccessible(page);
+  await page.getByLabel("Name", { exact: true }).fill("Sara Bianchi");
+  await page.getByLabel("Username", { exact: true }).fill("sara");
+  await page.getByLabel("Email", { exact: true }).fill(`sara-${slug}@rentcar.localhost`);
+  await page.getByRole("button", { name: "Add operator" }).click();
+  await expect(page.getByRole("main").getByRole("alert")).toContainText("couldn't be sent");
+  await expect(page.getByText("Activation not delivered")).toBeVisible();
+  await expect(page.getByText("1 of 2 operators")).toBeVisible();
+
+  await page.getByRole("button", { name: "Deactivate Sara Bianchi" }).click();
+  await expect(page.getByRole("button", { name: "Reactivate Sara Bianchi" })).toBeVisible();
+  await expect(page.getByText("0 of 2 operators")).toBeVisible();
+  await expectAccessible(page);
+});

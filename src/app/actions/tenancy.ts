@@ -2,11 +2,13 @@
 
 import { revalidatePath } from "next/cache";
 
+import { tenantActivationMail } from "@/app/_lib/credential-mail";
+import { dispatchAfterResponse } from "@/app/_lib/outbox";
+import { consume, tokenIssued } from "@/app/_lib/security";
 import { requireSystemSession } from "@/app/_lib/session";
 import { getContainer } from "@/composition/container";
-import { getTranslator, type MessageKey } from "@/i18n";
-import { credentialPath, issueAdminAccessLink } from "@/modules/auth";
-import { renderCredentialEmail } from "@/modules/notifications";
+import type { MessageKey } from "@/i18n";
+import { issueAdminAccessLink } from "@/modules/auth";
 import {
   changeSubscriptionEnd,
   createTenantInput,
@@ -16,8 +18,6 @@ import {
 import type { ConsoleActionState } from "@/modules/tenancy/ui/console-action-form";
 import type { CreateTenantState } from "@/modules/tenancy/ui/form-state";
 import { RATE_LIMITS } from "@/platform/rate-limit/postgres";
-
-import { consume, tokenIssued } from "@/app/_lib/security";
 
 // TEN-03 entry point: parse the console form, provision in one system transaction, then await the
 // activation email through the system SMTP (BE-D6). The token exists only in memory here.
@@ -87,17 +87,9 @@ export async function createTenantAction(
     actorId: session.userId,
     subjectTenantId: result.tenantId,
   });
-  const mail = renderCredentialEmail(
-    {
-      purpose: "activation",
-      to: parsed.data.admin.email,
-      displayName: parsed.data.admin.displayName,
-      username: parsed.data.admin.username,
-      link: `${c.baseUrl}${credentialPath({ kind: "tenant", slug: result.slug }, "activation", result.activationToken)}`,
-    },
-    getTranslator(),
+  const sent = await c.mailer.sendSystem(
+    tenantActivationMail(result.slug, { ...parsed.data.admin, token: result.activationToken }),
   );
-  const sent = await c.mailer.sendSystem(mail);
   return { status: "created", slug: result.slug, emailSent: sent.ok };
 }
 
@@ -166,17 +158,8 @@ export async function adminAccessLinkAction(slug: string): Promise<ConsoleAction
   revalidatePath(`/system/tenants/${slug}`);
   if (!link) return { status: "error", messageKey: "tenantDetail.adminNone" };
   await tokenIssued({ realm: "system", reasonCode: "admin_access", actorId: session.userId });
-  const mail = renderCredentialEmail(
-    {
-      purpose: "activation",
-      to: link.email,
-      displayName: link.displayName,
-      username: link.username,
-      link: `${c.baseUrl}${credentialPath({ kind: "tenant", slug }, "activation", link.token)}`,
-    },
-    getTranslator(),
-  );
-  const sent = await c.mailer.sendSystem(mail);
+  dispatchAfterResponse({ kind: "tenant", tenantId: link.tenantId });
+  const sent = await c.mailer.sendSystem(tenantActivationMail(slug, link));
   return sent.ok
     ? { status: "done", messageKey: "tenantDetail.accessLinkSent" }
     : { status: "error", messageKey: "tenantDetail.accessLinkFailed" };

@@ -3,6 +3,7 @@ import type pg from "pg";
 
 import { withSystemTx } from "../../../platform/db/system-tx";
 import { tenantRealm } from "../domain/realm";
+import { enqueueAccountNotice } from "./account-notice";
 import { issueCredentialLink } from "./credential-links";
 
 // AUT-17 issueAdminAccessLink (docs/06-backend-api.md 4.2.5). Same admin, new access: the password is
@@ -10,6 +11,7 @@ import { issueCredentialLink } from "./credential-links";
 // One transaction in the system scope, with the platform and tenant audit rows.
 
 export interface AdminAccessLink {
+  tenantId: string;
   slug: string;
   username: string;
   displayName: string;
@@ -25,7 +27,9 @@ interface AdminRow {
   email: string;
 }
 
+/** Audit rows plus the notice to the admin's address (SY-06, SR-AUT-10), in the reset transaction. */
 async function auditReset(c: pg.ClientBase, admin: AdminRow, actorUserId: string, now: Date) {
+  await enqueueAccountNotice(c, { userId: admin.id, template: "notice.admin_access_changed", now });
   await c.query(
     `INSERT INTO platform_audit (id, created_at, actor_user_id, action, subject_tenant_id, entity_ref)
      VALUES ($1, $2, $3, 'admin.reset', $4, $5)`,
@@ -71,6 +75,7 @@ export async function issueAdminAccessLink(
     });
     await auditReset(c, admin, input.actorUserId, input.now);
     return {
+      tenantId: admin.tenant_id,
       slug: input.slug,
       username: admin.username,
       displayName: admin.display_name,

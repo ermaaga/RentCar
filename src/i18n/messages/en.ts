@@ -162,9 +162,78 @@ export const en = {
       ignore:
         "If you did not expect this email, you can ignore it. Nothing changes until the link is used.",
     },
+    notice: {
+      passwordChanged: {
+        subject: "Your RentCar password was changed",
+        body: "Hello {name}, the password of your account was changed and your other devices were signed out.",
+      },
+      passwordResetCompleted: {
+        subject: "Your RentCar password was reset",
+        body: "Hello {name}, the password of your account was reset with an emailed link.",
+      },
+      adminAccessChanged: {
+        subject: "Your RentCar administrator access was reset",
+        body: "Hello {name}, the platform owner reset the access to your administrator account. A new set-password link was sent to the account's email address.",
+      },
+      emailChanged: {
+        subject: "The email of your RentCar account was changed",
+        body: "Hello {name}, the email address of your account was changed by your administrator. From now on, emails for this account go to the new address.",
+      },
+      notYou:
+        "If you did not expect this, contact your administrator or the platform owner at once.",
+    },
     smtpTest: {
       subject: "RentCar test email",
       body: "Your email settings work: this message was sent through your own mail server.",
+    },
+  },
+  operators: {
+    title: "Operators",
+    link: "Operators",
+    usage: "{used} of {max} operators",
+    intro: "Operators can view bookings, the calendar and vehicles but can't change anything.",
+    empty: "No operators yet.",
+    smtpMissing: "Activation emails can't be sent until email settings are fixed.",
+    fixSmtp: "Fix email settings",
+    add: {
+      title: "Add operator",
+      name: "Name",
+      username: "Username",
+      usernameHint: "3 to 64 lowercase letters, digits, dots, hyphens or underscores.",
+      email: "Email",
+      helper: "We'll email a link to set a password. It's valid for 24 hours.",
+      submit: "Add operator",
+      pending: "Adding…",
+      sent: "Operator added. The activation email was sent.",
+      notSent:
+        "Operator created, but the email couldn't be sent. Fix your email settings, then re-send the link.",
+      invalid: "Check the highlighted fields.",
+      usernameTaken: "This username is taken.",
+      limitReached: "Operator limit reached. Ask the platform owner for more seats.",
+    },
+    status: {
+      pending: "Pending activation",
+      active: "Active",
+      deactivated: "Deactivated",
+      activation_not_delivered: "Activation not delivered",
+    },
+    resend: "Re-send activation link",
+    resent: "A new activation link was sent.",
+    resendFailed: "The link couldn't be sent. Fix your email settings, then try again.",
+    deactivate: "Deactivate {name}",
+    deactivateHint: "They will be signed out and can't sign in. This frees an operator slot.",
+    deactivated: "Operator deactivated and signed out.",
+    reactivate: "Reactivate {name}",
+    reactivated: "Operator reactivated.",
+    notFound: "That operator no longer exists.",
+    notPending: "This operator has already set a password.",
+    throttled: "Too many activation links. Try again in an hour.",
+    columns: {
+      name: "Name",
+      username: "Username",
+      email: "Email",
+      status: "Status",
+      actions: "Actions",
     },
   },
   settings: {

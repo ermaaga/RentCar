@@ -43,6 +43,7 @@ async function seed(): Promise<Fixture> {
 async function cleanup(f: Fixture): Promise<void> {
   await admin.query("DELETE FROM sessions WHERE tenant_id = $1", [f.tenantId]);
   await admin.query("DELETE FROM credential_tokens WHERE tenant_id = $1", [f.tenantId]);
+  await admin.query("DELETE FROM email_log WHERE tenant_id = $1", [f.tenantId]);
   await admin.query("DELETE FROM users WHERE tenant_id = $1", [f.tenantId]);
   await admin.query("DELETE FROM tenants WHERE id = $1", [f.tenantId]);
 }
