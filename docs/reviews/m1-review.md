@@ -16,7 +16,7 @@ This is **not** the formal quality loop of `13-piano-implementazione.md` §4 (co
 |---|---|---|---|
 | R1 | High | Per-IP limits trusted the leftmost `X-Forwarded-For` value (M1-D1) | **Fixed** in this branch |
 | R2 | Medium | Security traceability tests never ran (M1-D2) | **Fixed** in this branch |
-| R3 | Medium | Coverage gates of the DoD are not enforced (only config is measured) | Open: change coverage scope, add domain tests |
+| R3 | Medium | Coverage gates of the DoD are not enforced (only config is measured) | **Fixed**: the unit job now measures `modules/*/domain` (>= 90 %) and `modules/*/application` (>= 80 %); infrastructure stays covered by the integration suite |
 | R4 | Medium | No route registry / `defineAction`: role and origin checks are per action, and no generated matrix proves every route (ABU-M1-01/02/17) | Open: build before M2 adds public routes |
 | R5 | Medium | Password policy lacks the common-password list and the equals-username rule (ABU-M1-14, ASVS 2.1.7) | Open |
 | R6 | Low | No `tenant.mismatch`, `access.denied`, `csrf.rejected`, `system.context.used` security events yet | Open |
