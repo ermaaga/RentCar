@@ -71,6 +71,13 @@ export default async function ConfirmationPage(props: Props) {
         </div>
         <Details booking={booking} currency={tenant.currency} />
         <p>{t("public.confirmation.payment")}</p>
+        <a
+          href={`/${tenant.slug}/booking/${booking.code}/pdf`}
+          download
+          className="min-h-12 content-center font-semibold underline"
+        >
+          {t("public.confirmation.pdf")}
+        </a>
         <Link href={`/${tenant.slug}`} className="min-h-12 content-center underline">
           {t("public.confirmation.newSearch")}
         </Link>

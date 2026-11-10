@@ -31,6 +31,9 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
+  // PDF fonts are read from disk at runtime (10.1): ship them with the standalone output.
+  outputFileTracingIncludes: { "/[slug]/booking/[code]/pdf": ["./assets/fonts/*"] },
+  serverExternalPackages: ["@react-pdf/renderer"],
   reactStrictMode: true,
   headers() {
     return Promise.resolve([{ source: "/:path*", headers: securityHeaders }]);

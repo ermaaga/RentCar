@@ -268,6 +268,12 @@ export const ENTRY_POINTS: readonly EntryPoint[] = [
     reason: PUBLIC_SITE,
   },
   {
+    id: "route:(tenant)/[slug]/booking/[code]/pdf",
+    realm: "public",
+    writeClass: "read",
+    reason: PUBLIC_SITE,
+  },
+  {
     id: action("public-booking", "submitBookingAction"),
     realm: "public",
     writeClass: "write",
