@@ -9,6 +9,8 @@ export interface Offer {
   category: string;
   fuelType: string;
   seats: number;
+  /** 480 px cover photo, or null when the vehicle has no photo. */
+  coverUrl: string | null;
   billedDays: number;
   dailyPriceMinor: number;
   totalMinor: number;

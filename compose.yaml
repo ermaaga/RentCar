@@ -80,6 +80,9 @@ services:
       SYSTEM_SMTP_FROM_ADDRESS: ${SYSTEM_SMTP_FROM_ADDRESS:-noreply@rentcar.localhost}
       SYSTEM_ADMIN_EMAIL: ${SYSTEM_ADMIN_EMAIL:-owner@rentcar.localhost}
       SMTP_DEV_ALLOW_PRIVATE: ${SMTP_DEV_ALLOW_PRIVATE:-true}
+      STORAGE_LOCAL_DIR: /data/storage
+    volumes:
+      - storage:/data/storage
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:
@@ -121,3 +124,5 @@ services:
 
 volumes:
   pgdata:
+  # Vehicle photos and logos (STORAGE_PROVIDER=local, ADR-0009).
+  storage:

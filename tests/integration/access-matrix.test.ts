@@ -127,6 +127,8 @@ const INVOKERS: Record<string, (a: Tenant) => unknown[]> = {
   ],
   "action:actions/vehicles#setMaintenanceAction": (a) => [a.slug, randomUUID(), true],
   "action:actions/vehicles#removeVehicleAction": (a) => [a.slug, randomUUID(), "delete"],
+  "action:actions/vehicle-photos#setCoverPhotoAction": (a) => [a.slug, randomUUID(), randomUUID()],
+  "action:actions/vehicle-photos#deletePhotoAction": (a) => [a.slug, randomUUID(), randomUUID()],
   "action:actions/settings#saveSmtpAction": (a) => [a.slug, idle, form(smtpFields)],
   "action:actions/settings#testSmtpAction": (a) => [a.slug],
   "action:actions/tenancy#createTenantAction": () => [idle, form({ name: "x" })],
@@ -173,7 +175,8 @@ async function footprint(tenantId: string): Promise<string> {
           || ':' || (SELECT status FROM tenants WHERE id = $1)
           || ':' || (SELECT string_agg(display_name || email, ',' ORDER BY id) FROM users WHERE tenant_id = $1)
           || ':' || (SELECT count(*) FROM sessions WHERE tenant_id = $1)
-          || ':' || (SELECT count(*) FROM vehicles WHERE tenant_id = $1) AS f`,
+          || ':' || (SELECT count(*) FROM vehicles WHERE tenant_id = $1)
+          || ':' || (SELECT count(*) FROM vehicle_photos WHERE tenant_id = $1) AS f`,
     [tenantId],
   );
   return res.rows[0]?.f ?? "";
@@ -197,7 +200,7 @@ beforeAll(async () => {
     PASSWORD_PEPPER: "p".repeat(40),
   });
   admin = new pg.Pool({ connectionString: adminUrl, max: 2 });
-  for (const file of ["auth", "operators", "settings", "tenancy", "vehicles"]) {
+  for (const file of ["auth", "operators", "settings", "tenancy", "vehicles", "vehicle-photos"]) {
     modules[file] = (await import(`../../src/app/actions/${file}.ts`)) as Record<string, Action>;
   }
   a = await tenant();
@@ -246,6 +249,36 @@ describe.skipIf(!appUrl || !adminUrl)("access matrix: every protected action", (
       jar.cookies.set(TENANT_COOKIE, a.adminToken);
       expect(refused(await call(e.id, a), "/system/login"), e.id).toBe(true);
     }
+    expect(await footprint(a.id)).toBe(before);
+  });
+});
+
+// FLT-07 upload route: answers a status instead of redirecting; refused before the body is read.
+describe.skipIf(!appUrl || !adminUrl)("access matrix: photo upload route", () => {
+  async function upload(origin: string | null, cookie?: string): Promise<number> {
+    const { POST } = await import("../../src/app/(tenant)/[slug]/admin/vehicles/[id]/photos/route");
+    const { NextRequest } = await import("next/server");
+    jar.cookies.clear();
+    if (cookie) jar.cookies.set(TENANT_COOKIE, cookie);
+    const headers = new Headers(origin ? { origin } : {});
+    const req = new NextRequest(`http://localhost:3000/${a.slug}/admin/vehicles/x/photos`, {
+      method: "POST",
+      headers,
+      body: "not an image",
+    });
+    const params = Promise.resolve({ slug: a.slug, id: randomUUID() });
+    return (await POST(req, { params })).status;
+  }
+
+  it("refuses a foreign origin, no session, an operator and another tenant's admin", async () => {
+    const before = await footprint(a.id);
+    const own = "http://localhost:3000";
+    expect(await upload("https://evil.example", a.adminToken)).toBe(403);
+    expect(await upload(null, a.adminToken)).toBe(403);
+    expect(await upload(own)).toBe(401);
+    expect(await upload(own, a.operatorToken)).toBe(401);
+    expect(await upload(own, b.adminToken)).toBe(401);
+    expect(await upload(own, a.adminToken)).toBe(404);
     expect(await footprint(a.id)).toBe(before);
   });
 });

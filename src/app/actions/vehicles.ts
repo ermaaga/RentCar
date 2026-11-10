@@ -9,6 +9,7 @@ import type { MessageKey } from "@/i18n";
 import {
   createVehicle,
   parsePriceToMinor,
+  removePhotoObjects,
   removeVehicle,
   setMaintenance,
   updateVehicle,
@@ -142,6 +143,7 @@ export const removeVehicleAction = tenantAction(
         result.code === "NOT_FOUND" ? "vehicles.detail.notFound" : "vehicles.detail.hasHistory",
       );
     }
+    await removePhotoObjects(c.storage, result.photoKeys);
     revalidatePath(`/${tenant.slug}/admin/vehicles`);
     redirect(`/${tenant.slug}/admin/vehicles`);
   },

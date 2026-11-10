@@ -10,6 +10,8 @@ import { createPool } from "../platform/db/pool";
 import { cookiesMustBeSecure } from "../platform/http/session-cookie";
 import type { Mailer } from "../platform/mailer/port";
 import { createSmtpMailer } from "../platform/mailer/smtp-mailer";
+import { createLocalStorage } from "../platform/storage/local";
+import type { StoragePort } from "../platform/storage/port";
 
 // Composition root (docs/03b-struttura-codice.md section 5): the only place that builds adapters
 // from configuration. Built once per process, lazily, so `next build` never needs the database.
@@ -36,6 +38,12 @@ export interface Container {
   formTokenKey: Buffer;
   /** Outbox templates rendered by other modules (docs/06-backend-api.md 3.x item 1). */
   emailSources: EmailSources;
+  /** Object storage for photos and logos (ADR-0009); local disk until the s3 adapter lands. */
+  storage: StoragePort;
+  /** UPLOAD_MAX_BYTES: photo upload cap, checked before and while reading the body. */
+  uploadMaxBytes: number;
+  /** TENANT_STORAGE_QUOTA_BYTES: per-tenant sum of stored photo variants. */
+  storageQuotaBytes: number;
 }
 
 let container: Container | undefined;
@@ -70,6 +78,9 @@ function build(): Container {
     trustedProxyCount: cfg.TRUSTED_PROXY_COUNT ?? 1,
     formTokenKey: deriveKey(cfg.APP_ENCRYPTION_KEY, "form-token"),
     emailSources: bookingEmailSources(cfg.APP_BASE_URL.replace(/\/$/, "")),
+    storage: createLocalStorage(cfg.STORAGE_LOCAL_DIR),
+    uploadMaxBytes: cfg.UPLOAD_MAX_BYTES,
+    storageQuotaBytes: cfg.TENANT_STORAGE_QUOTA_BYTES,
   };
 }
 

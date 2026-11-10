@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { requireTenantSession, tenantWriteRefusal } from "@/app/_lib/session";
+import { deletePhotoAction, setCoverPhotoAction } from "@/app/actions/vehicle-photos";
 import {
   removeVehicleAction,
   setMaintenanceAction,
@@ -9,7 +10,8 @@ import {
 } from "@/app/actions/vehicles";
 import { getContainer } from "@/composition/container";
 import { formatMessage, getTranslator } from "@/i18n";
-import { getVehicle, type VehicleRow } from "@/modules/fleet";
+import { getVehicle, listVehiclePhotos, type VehicleRow } from "@/modules/fleet";
+import { PhotoManager } from "@/modules/fleet/ui/photo-manager";
 import { VehicleForm } from "@/modules/fleet/ui/vehicle-form";
 import { ConsoleActionForm } from "@/modules/tenancy/ui/console-action-form";
 import { Alert } from "@/ui/alert";
@@ -62,6 +64,37 @@ function AdminControls({ slug, v }: { slug: string; v: VehicleRow }) {
   );
 }
 
+async function Photos({ slug, tenantId, v }: { slug: string; tenantId: string; v: VehicleRow }) {
+  const c = getContainer();
+  const photos = await listVehiclePhotos(c.pool, { tenantId, vehicleId: v.id });
+  return (
+    <PhotoManager
+      vehicleName={v.name}
+      uploadUrl={`/${slug}/admin/vehicles/${v.id}/photos`}
+      maxBytes={c.uploadMaxBytes}
+      photos={photos.map((p) => ({
+        id: p.id,
+        small: p.small,
+        isCover: p.isCover,
+        controls: (
+          <>
+            {p.isCover ? null : (
+              <ConsoleActionForm
+                action={setCoverPhotoAction.bind(null, slug, v.id, p.id)}
+                submit="vehicles.photos.makeCover"
+              />
+            )}
+            <ConsoleActionForm
+              action={deletePhotoAction.bind(null, slug, v.id, p.id)}
+              submit="vehicles.photos.remove"
+            />
+          </>
+        ),
+      }))}
+    />
+  );
+}
+
 export default async function VehiclePage(props: {
   params: Promise<{ slug: string; id: string }>;
 }) {
@@ -95,6 +128,7 @@ export default async function VehiclePage(props: {
             action={updateVehicleAction.bind(null, tenant.slug, v.id)}
             values={formValues(v)}
           />
+          <Photos slug={tenant.slug} tenantId={tenant.tenantId} v={v} />
           <AdminControls slug={tenant.slug} v={v} />
         </>
       ) : null}

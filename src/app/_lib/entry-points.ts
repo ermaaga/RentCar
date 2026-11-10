@@ -20,6 +20,13 @@ export interface EntryPoint {
 
 const action = (file: string, name: string) => `action:actions/${file}#${name}`;
 
+const tenantEntry = (id: string, minRole: MinRole, writeClass: WriteClass): EntryPoint => ({
+  id,
+  realm: "tenant",
+  minRole,
+  writeClass,
+});
+
 const LOGOUT = "only clears the realm cookie and its own session row";
 const PUBLIC_SITE = "public booking site: customers book without an account (FR-PUB-01)";
 const PUBLIC_AUTH = "sign-in, set-password and reset flows run before a session exists";
@@ -68,12 +75,7 @@ export const ENTRY_POINTS: readonly EntryPoint[] = [
     minRole: "systemadmin",
     writeClass: "ro_allowed",
   },
-  {
-    id: action("auth", "changeTenantPasswordAction"),
-    realm: "tenant",
-    minRole: "operator",
-    writeClass: "ro_allowed",
-  },
+  tenantEntry(action("auth", "changeTenantPasswordAction"), "operator", "ro_allowed"),
   {
     id: action("password-reset", "requestSystemResetAction"),
     realm: "public",
@@ -87,68 +89,18 @@ export const ENTRY_POINTS: readonly EntryPoint[] = [
     reason: PUBLIC_AUTH,
   },
   // Operators (AUT-12..15): tenant admin only.
-  {
-    id: action("operators", "createOperatorAction"),
-    realm: "tenant",
-    minRole: "admin",
-    writeClass: "write",
-  },
-  {
-    id: action("operators", "setOperatorActiveAction"),
-    realm: "tenant",
-    minRole: "admin",
-    writeClass: "write",
-  },
-  {
-    id: action("operators", "reissueOperatorLinkAction"),
-    realm: "tenant",
-    minRole: "admin",
-    writeClass: "write",
-  },
-  {
-    id: action("operators", "updateOperatorAction"),
-    realm: "tenant",
-    minRole: "admin",
-    writeClass: "write",
-  },
+  tenantEntry(action("operators", "createOperatorAction"), "admin", "write"),
+  tenantEntry(action("operators", "setOperatorActiveAction"), "admin", "write"),
+  tenantEntry(action("operators", "reissueOperatorLinkAction"), "admin", "write"),
+  tenantEntry(action("operators", "updateOperatorAction"), "admin", "write"),
   // Vehicles (FLT-01..04): tenant admin only.
-  {
-    id: action("vehicles", "createVehicleAction"),
-    realm: "tenant",
-    minRole: "admin",
-    writeClass: "write",
-  },
-  {
-    id: action("vehicles", "updateVehicleAction"),
-    realm: "tenant",
-    minRole: "admin",
-    writeClass: "write",
-  },
-  {
-    id: action("vehicles", "setMaintenanceAction"),
-    realm: "tenant",
-    minRole: "admin",
-    writeClass: "write",
-  },
-  {
-    id: action("vehicles", "removeVehicleAction"),
-    realm: "tenant",
-    minRole: "admin",
-    writeClass: "write",
-  },
+  tenantEntry(action("vehicles", "createVehicleAction"), "admin", "write"),
+  tenantEntry(action("vehicles", "updateVehicleAction"), "admin", "write"),
+  tenantEntry(action("vehicles", "setMaintenanceAction"), "admin", "write"),
+  tenantEntry(action("vehicles", "removeVehicleAction"), "admin", "write"),
   // Tenant SMTP (NTF-01/02): tenant admin only.
-  {
-    id: action("settings", "saveSmtpAction"),
-    realm: "tenant",
-    minRole: "admin",
-    writeClass: "write",
-  },
-  {
-    id: action("settings", "testSmtpAction"),
-    realm: "tenant",
-    minRole: "admin",
-    writeClass: "write",
-  },
+  tenantEntry(action("settings", "saveSmtpAction"), "admin", "write"),
+  tenantEntry(action("settings", "testSmtpAction"), "admin", "write"),
   // Platform console (TEN-03..06, SUB-02, AUT-17): systemadmin only.
   {
     id: action("tenancy", "createTenantAction"),
@@ -280,34 +232,19 @@ export const ENTRY_POINTS: readonly EntryPoint[] = [
     reason: PUBLIC_SITE,
   },
   { id: "page:(tenant)/[slug]/admin", realm: "tenant", minRole: "operator", writeClass: "read" },
+  tenantEntry("page:(tenant)/[slug]/admin/account", "operator", "read"),
+  tenantEntry("page:(tenant)/[slug]/admin/operators", "admin", "read"),
+  tenantEntry("page:(tenant)/[slug]/admin/vehicles", "operator", "read"),
+  tenantEntry("page:(tenant)/[slug]/admin/vehicles/[id]", "operator", "read"),
+  // Vehicle photos (FLT-07/09/10): admin of a writable tenant; /media serves only public variants.
+  tenantEntry("route:(tenant)/[slug]/admin/vehicles/[id]/photos", "admin", "write"),
+  tenantEntry(action("vehicle-photos", "setCoverPhotoAction"), "admin", "write"),
+  tenantEntry(action("vehicle-photos", "deletePhotoAction"), "admin", "write"),
   {
-    id: "page:(tenant)/[slug]/admin/account",
-    realm: "tenant",
-    minRole: "operator",
+    id: "route:media/[...key]",
+    realm: "public",
     writeClass: "read",
+    reason: "vehicle photos shown on the public booking site; only public variant keys match",
   },
-  {
-    id: "page:(tenant)/[slug]/admin/operators",
-    realm: "tenant",
-    minRole: "admin",
-    writeClass: "read",
-  },
-  {
-    id: "page:(tenant)/[slug]/admin/vehicles",
-    realm: "tenant",
-    minRole: "operator",
-    writeClass: "read",
-  },
-  {
-    id: "page:(tenant)/[slug]/admin/vehicles/[id]",
-    realm: "tenant",
-    minRole: "operator",
-    writeClass: "read",
-  },
-  {
-    id: "page:(tenant)/[slug]/admin/settings/email",
-    realm: "tenant",
-    minRole: "admin",
-    writeClass: "read",
-  },
+  tenantEntry("page:(tenant)/[slug]/admin/settings/email", "admin", "read"),
 ];

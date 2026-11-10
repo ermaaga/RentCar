@@ -69,5 +69,6 @@ export const RATE_LIMITS = {
   publicSearch: { scope: "public.search", limit: 5, windowMs: 60_000 },
   publicBookingSubmit: { scope: "public.booking_submit", limit: 10, windowMs: HOUR },
   publicCodeMiss: { scope: "public.pdf_miss", limit: 10, windowMs: HOUR },
+  upload: { scope: "upload", limit: 30, windowMs: HOUR },
   jobAuthFailureIp: { scope: "job.auth_failure.ip", limit: 10, windowMs: 60_000 },
 } as const satisfies Record<string, RateLimitRule>;

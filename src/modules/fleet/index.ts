@@ -14,3 +14,12 @@ export {
   vehicleUsage,
 } from "./infrastructure/vehicles";
 export type { VehicleRow } from "./infrastructure/vehicles";
+export {
+  addVehiclePhoto,
+  deletePhoto,
+  listVehiclePhotos,
+  photoUrl,
+  removePhotoObjects,
+  setCoverPhoto,
+} from "./infrastructure/photos";
+export type { PhotoDeps } from "./infrastructure/photos";

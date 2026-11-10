@@ -27,6 +27,8 @@ COPY --from=builder --chown=node:node /app/.next/static ./.next/static
 COPY --from=builder --chown=node:node /app/public ./public
 COPY --from=builder --chown=node:node /app/dist-scripts ./dist-scripts
 COPY --from=builder --chown=node:node /app/drizzle ./drizzle
+# Local object storage (STORAGE_LOCAL_DIR); a named volume mounted here keeps this ownership.
+RUN mkdir -p /data/storage && chown node:node /data/storage
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \

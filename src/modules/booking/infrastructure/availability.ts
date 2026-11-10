@@ -1,6 +1,7 @@
 import type pg from "pg";
 
 import { withTenantTx } from "../../../platform/db/tenant-tx";
+import { photoUrl } from "../../fleet";
 import { parseLocal } from "../domain/local-time";
 import { applyOfferFilter, type Offer } from "../domain/offers";
 import { checkPeriod, type PeriodError } from "../domain/period-rules";
@@ -53,6 +54,7 @@ interface VehicleDb {
   fuel_type: string;
   seats: number;
   daily_price_minor: string;
+  cover_key: string | null;
 }
 
 async function freeVehicles(
@@ -60,8 +62,10 @@ async function freeVehicles(
   q: { tenantId: string; start: Date; blockedUntil: Date; input: SearchInput },
 ): Promise<VehicleDb[]> {
   const res = await c.query<VehicleDb>(
-    `SELECT v.id, v.name, v.make, v.model, v.category, v.fuel_type, v.seats, v.daily_price_minor
+    `SELECT v.id, v.name, v.make, v.model, v.category, v.fuel_type, v.seats, v.daily_price_minor,
+            p.storage_key AS cover_key
        FROM vehicles v
+       LEFT JOIN vehicle_photos p ON p.vehicle_id = v.id AND p.is_cover
       WHERE v.tenant_id = $1 AND v.archived_at IS NULL AND v.status = 'available'
         AND (cardinality($4::text[]) = 0 OR v.category = ANY($4::text[]))
         AND ($5::text IS NULL OR v.fuel_type = $5)
@@ -125,6 +129,7 @@ export async function searchAvailability(
       category: v.category,
       fuelType: v.fuel_type,
       seats: v.seats,
+      coverUrl: v.cover_key ? photoUrl(v.cover_key, 480) : null,
       ...price({ start, end }, Number(v.daily_price_minor), s.time_zone),
     }));
     return {
