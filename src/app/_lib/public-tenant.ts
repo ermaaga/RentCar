@@ -1,7 +1,9 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { cache } from "react";
 
 import { getContainer } from "@/composition/container";
+import { getTranslator, type MessageKey } from "@/i18n";
 import { canTakeBookings, loadEffectiveAccess } from "@/modules/subscriptions";
 import {
   getPublicTenantSettings,
@@ -49,4 +51,13 @@ export async function searchAllowed(tenantId: string): Promise<boolean> {
   } catch {
     return true;
   }
+}
+
+/** "<page title> · <tenant title>", never indexed (FR-PUB-14 default). */
+export async function publicPageMetadata(slug: string, title: MessageKey): Promise<Metadata> {
+  const tenant = await loadPublicTenant(slug);
+  return {
+    title: `${getTranslator()(title)} · ${tenant.title}`,
+    robots: { index: false, follow: false },
+  };
 }
