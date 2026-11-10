@@ -98,6 +98,10 @@ test("a customer books a car and sees the confirmation with the code", async ({ 
   await expect(page.getByRole("main")).not.toContainText("mario@rentcar.localhost");
   await expectAccessible(page);
 
+  const download = page.waitForEvent("download");
+  await page.getByRole("link", { name: "Download the confirmation (PDF)" }).click();
+  expect((await download).suggestedFilename()).toMatch(/^booking-[0-9A-Z]{10}\.pdf$/);
+
   await page.goBack();
   await page.reload();
   await expect(page.getByRole("main").getByRole("alert")).toHaveText(

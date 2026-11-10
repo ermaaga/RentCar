@@ -15,3 +15,4 @@ export type { SubmitResult } from "./infrastructure/public-booking";
 export { getPublicConfirmation } from "./infrastructure/public-confirmation";
 export type { PublicConfirmation } from "./infrastructure/public-confirmation";
 export { bookingEmailSources } from "./infrastructure/booking-emails";
+export { renderConfirmationPdf } from "./infrastructure/confirmation-pdf";
