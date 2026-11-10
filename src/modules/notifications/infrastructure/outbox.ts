@@ -4,10 +4,10 @@ import type pg from "pg";
 import type { MessageKey } from "../../../i18n";
 import { withSystemTx } from "../../../platform/db/system-tx";
 import { withTenantTx } from "../../../platform/db/tenant-tx";
-import type { Mailer, SendResult } from "../../../platform/mailer/port";
+import type { Mailer, MailMessage, SendResult } from "../../../platform/mailer/port";
 import type { NoticeTemplate } from "../application/notice-email";
 import type { RenewalTemplate } from "../application/renewal-email";
-import { renderOutboxRow, type EmailSources } from "./outbox-render";
+import { renderOutboxRow, type EmailSources, type RenderedMail } from "./outbox-render";
 import { sendTenantMail } from "./tenant-mail";
 
 // Transactional outbox (docs/06-backend-api.md 9.3, 05-database 5.15). A row is enqueued inside the
@@ -141,11 +141,26 @@ async function send(
   if (!mail) {
     return { result: { ok: false, category: "unknown" }, unusable: true };
   }
+  const message = await materialise(mail);
   const result =
     row.channel === "tenant_smtp" && row.tenant_id
-      ? await sendTenantMail(deps, row.tenant_id, mail)
-      : await deps.mailer.sendSystem(mail);
+      ? await sendTenantMail(deps, row.tenant_id, message)
+      : await deps.mailer.sendSystem(message);
   return { result, unusable: false };
+}
+
+/** Renders the lazy attachments with no transaction open; a failure fails this attempt (retried). */
+async function materialise(mail: RenderedMail): Promise<MailMessage> {
+  const { lazyAttachments = [], ...message } = mail;
+  if (lazyAttachments.length === 0) return message;
+  const rendered = await Promise.all(
+    lazyAttachments.map(async (a) => ({
+      filename: a.filename,
+      contentType: a.contentType,
+      content: await a.render(),
+    })),
+  );
+  return { ...message, attachments: [...(message.attachments ?? []), ...rendered] };
 }
 
 type Outcome = "sent" | "failed" | "abandoned";

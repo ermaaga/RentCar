@@ -40,4 +40,4 @@ tenant scope) and the E2E download in `tests/e2e/public.spec.ts`.
 **Decision**: keep react-pdf (ADR-0006). The Latin subset covers the launch languages (Western
 European, euro sign); names in other scripts would need a wider font file, recorded as a follow-up
 rather than shipping a 500 KB font now. Logo rendering waits for the upload slice (`StoragePort`);
-attaching the PDF to the confirmation email is the next step of the email slice.
+the PDF is attached to the confirmation email (rendered by the outbox after its read transaction).

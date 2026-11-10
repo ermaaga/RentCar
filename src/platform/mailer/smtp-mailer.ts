@@ -70,9 +70,11 @@ async function deliver(
   replyTo?: string,
 ): Promise<SendResult> {
   try {
+    const { attachments, ...rest } = message;
     await transportFor(connection).sendMail({
       from,
-      ...message,
+      ...rest,
+      ...(attachments ? { attachments: attachments.map((a) => ({ ...a })) } : {}),
       ...(replyTo ? { replyTo } : {}),
     });
     return { ok: true };

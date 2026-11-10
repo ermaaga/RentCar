@@ -15,8 +15,20 @@ type Translate = (key: MessageKey) => string;
  * loads its record and renders the message; composition registers it, so this module never imports it.
  */
 interface EmailDataSource {
-  load(c: pg.ClientBase, row: OutboxRow, t: Translate): Promise<MailMessage | null>;
+  load(c: pg.ClientBase, row: OutboxRow, t: Translate): Promise<RenderedMail | null>;
 }
+
+/**
+ * An attachment produced after the read transaction closes (PDF rendering never runs inside a
+ * transaction, SR-DB-07), again on every attempt so it shows current data (SR-EML-06).
+ */
+interface LazyAttachment {
+  filename: string;
+  contentType: string;
+  render(): Promise<Buffer>;
+}
+
+export type RenderedMail = MailMessage & { lazyAttachments?: readonly LazyAttachment[] };
 
 export type EmailSources = Readonly<Record<string, EmailDataSource>>;
 
@@ -65,7 +77,7 @@ export async function renderOutboxRow(
   row: OutboxRow,
   t: Translate,
   sources: EmailSources = {},
-): Promise<MailMessage | null> {
+): Promise<RenderedMail | null> {
   if (!row.recipient) {
     return null;
   }
