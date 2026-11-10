@@ -27,25 +27,24 @@ interface Row {
   total_minor: string;
 }
 
-async function load(
-  pool: pg.Pool,
+/** Loads the PDF data by code or by booking id, in the caller's tenant transaction. */
+export async function loadConfirmationData(
+  c: pg.ClientBase,
   tenantId: string,
-  code: string,
+  by: { code: string } | { id: string },
 ): Promise<ConfirmationData | null> {
-  const row = await withTenantTx(pool, tenantId, async (c) => {
-    const res = await c.query<Row>(
-      `SELECT b.code, s.title, s.contact_email, s.contact_phone, v.name AS vehicle,
+  const res = await c.query<Row>(
+    `SELECT b.code, s.title, s.contact_email, s.contact_phone, v.name AS vehicle,
               b.customer_first_name AS first_name, b.customer_last_name AS last_name,
               b.start_at, b.end_at, t.time_zone, t.currency, b.daily_price_minor, b.billed_days, b.total_minor
          FROM bookings b
          JOIN vehicles v ON v.id = b.vehicle_id
          JOIN tenants t ON t.id = b.tenant_id
          JOIN tenant_settings s ON s.tenant_id = b.tenant_id
-        WHERE b.tenant_id = $1 AND b.code = $2`,
-      [tenantId, code],
-    );
-    return res.rows[0];
-  });
+        WHERE b.tenant_id = $1 AND (b.code = $2 OR b.id = $3)`,
+    [tenantId, "code" in by ? by.code : null, "id" in by ? by.id : null],
+  );
+  const row = res.rows[0];
   if (!row) return null;
   return {
     code: row.code,
@@ -65,6 +64,14 @@ async function load(
   };
 }
 
+/** The PDF bytes for already loaded data (no transaction open). */
+export function confirmationPdf(
+  data: ConfirmationData,
+  t: (key: MessageKey) => string,
+): Promise<Buffer> {
+  return renderSummaryPdf(buildConfirmationModel(data, t));
+}
+
 export type ConfirmationPdf =
   { ok: true; code: string; pdf: Buffer } | { ok: false; code: "NOT_FOUND" | "PDF_UNAVAILABLE" };
 
@@ -74,13 +81,17 @@ export async function renderConfirmationPdf(
   t: (key: MessageKey) => string,
 ): Promise<ConfirmationPdf> {
   const code = normalizeCode(input.code);
-  const data = code ? await load(pool, input.tenantId, code) : null;
+  const data = code
+    ? await withTenantTx(pool, input.tenantId, (c) =>
+        loadConfirmationData(c, input.tenantId, { code }),
+      )
+    : null;
   if (!data) return { ok: false, code: "NOT_FOUND" };
   try {
     return {
       ok: true,
       code: data.code,
-      pdf: await renderSummaryPdf(buildConfirmationModel(data, t)),
+      pdf: await confirmationPdf(data, t),
     };
   } catch {
     return { ok: false, code: "PDF_UNAVAILABLE" };

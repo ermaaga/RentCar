@@ -71,6 +71,24 @@ function capturingMailer() {
   return { sent, mailer };
 }
 
+/** The customer confirmation (link, ignore line, PDF, no phone) and the admin notice (name, phone). */
+function expectBookingMails(sent: MailMessage[], b: { code: string; tenantId: string }): void {
+  const confirmation = sent.find((m) => m.to === "mario@example.test");
+  const notice = sent.find((m) => m.to === "owner@example.test");
+  if (!confirmation || !notice) throw new Error("both emails must be sent");
+  expect(confirmation.subject).toBe(`Booking ${b.code} confirmed · Shop`);
+  expect(confirmation.text).toContain(
+    `https://rent.example/pb-${b.tenantId.slice(0, 8)}/booking/${b.code}`,
+  );
+  expect(confirmation.text).toContain("If you did not make this booking");
+  expect(confirmation.text).not.toContain("+393331234567");
+  const [pdf] = confirmation.attachments ?? [];
+  expect(pdf?.filename).toBe(`booking-${b.code}.pdf`);
+  expect(pdf?.content.subarray(0, 5).toString("latin1")).toBe("%PDF-");
+  expect(notice.attachments).toBeUndefined();
+  expect(notice.text).toContain("Mario Rossi, +393331234567");
+}
+
 describe.skipIf(!adminUrl || !appUrl)("public booking: emails", () => {
   it("enqueues nothing without tenant SMTP", async () => {
     const { tenantId, vehicleId } = await shop();
@@ -93,16 +111,7 @@ describe.skipIf(!adminUrl || !appUrl)("public booking: emails", () => {
       sources: bookingEmailSources("https://rent.example"),
     };
     expect(await dispatchDue(deps, { kind: "tenant", tenantId }, now)).toMatchObject({ sent: 2 });
-    const code = result.ok ? result.code : "";
-    const confirmation = sent.find((m) => m.to === "mario@example.test");
-    expect(confirmation?.subject).toBe(`Booking ${code} confirmed · Shop`);
-    expect(confirmation?.text).toContain(
-      `https://rent.example/pb-${tenantId.slice(0, 8)}/booking/${code}`,
-    );
-    expect(confirmation?.text).toContain("If you did not make this booking");
-    expect(confirmation?.text).not.toContain("+393331234567");
-    const notice = sent.find((m) => m.to === "owner@example.test");
-    expect(notice?.text).toContain("Mario Rossi, +393331234567");
+    expectBookingMails(sent, { code: result.ok ? result.code : "", tenantId });
   });
 });
 

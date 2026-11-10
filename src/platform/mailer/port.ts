@@ -1,11 +1,18 @@
 // Mailer port (docs/06-backend-api.md 9.1). One message, one recipient; the result carries a failure
 // category only, never the provider's error text.
 
+interface MailAttachment {
+  filename: string;
+  contentType: string;
+  content: Buffer;
+}
+
 export interface MailMessage {
   to: string;
   subject: string;
   text: string;
   html: string;
+  attachments?: readonly MailAttachment[] | undefined;
 }
 
 export type SendFailure =

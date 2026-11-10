@@ -9,6 +9,7 @@ import {
   type BookingEmailData,
 } from "../application/booking-email";
 import { formatLocal } from "../domain/local-time";
+import { confirmationPdf, loadConfirmationData } from "./confirmation-pdf";
 
 // BookingNotifier.bookingCreated (docs/06-backend-api.md BKG-03 step 11, 9.2): enqueues the customer
 // confirmation and the admin notification in the booking transaction, through the tenant SMTP only.
@@ -140,21 +141,32 @@ async function loadData(c: pg.ClientBase, row: OutboxRow, baseUrl: string) {
 }
 
 /** The booking templates for the outbox, registered in composition (notifications never imports booking). */
+type Translate = (k: MessageKey) => string;
+
+/** The confirmation also carries the PDF, rendered after the read transaction on every attempt. */
+async function confirmationMail(c: pg.ClientBase, row: OutboxRow, t: Translate, baseUrl: string) {
+  const data = await loadData(c, row, baseUrl);
+  const pdfData = row.tenant_id
+    ? await loadConfirmationData(c, row.tenant_id, { id: row.related_id })
+    : null;
+  if (!data || !pdfData || !row.recipient) return null;
+  const attachment = {
+    filename: `booking-${data.code}.pdf`,
+    contentType: "application/pdf",
+    render: () => confirmationPdf(pdfData, t),
+  };
+  return { ...renderBookingConfirmation(row.recipient, data, t), lazyAttachments: [attachment] };
+}
+
+/** The booking templates for the outbox, registered in composition (notifications never imports booking). */
 export function bookingEmailSources(baseUrl: string): EmailSources {
-  const source = (
-    render: (
-      to: string,
-      d: BookingEmailData,
-      t: (k: MessageKey) => string,
-    ) => ReturnType<typeof renderAdminNewBooking>,
-  ) => ({
-    async load(c: pg.ClientBase, row: OutboxRow, t: (k: MessageKey) => string) {
-      const data = await loadData(c, row, baseUrl);
-      return data && row.recipient ? render(row.recipient, data, t) : null;
-    },
-  });
   return {
-    [CONFIRMATION]: source(renderBookingConfirmation),
-    [ADMIN_NEW]: source(renderAdminNewBooking),
+    [CONFIRMATION]: { load: (c, row, t) => confirmationMail(c, row, t, baseUrl) },
+    [ADMIN_NEW]: {
+      async load(c, row, t) {
+        const data = await loadData(c, row, baseUrl);
+        return data && row.recipient ? renderAdminNewBooking(row.recipient, data, t) : null;
+      },
+    },
   };
 }
