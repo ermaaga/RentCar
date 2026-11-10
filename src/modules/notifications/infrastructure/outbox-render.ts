@@ -5,8 +5,20 @@ import type { MailMessage } from "../../../platform/mailer/port";
 import { isNoticeTemplate, renderNotice } from "../application/notice-email";
 import { isRenewalTemplate, renderRenewal } from "../application/renewal-email";
 
+type Translate = (key: MessageKey) => string;
+
 // EmailDataSource of the outbox (docs/06-backend-api.md 9.3 step 3): each template loads what it needs
 // from the related record at send time, in the dispatch scope. Missing data gives null (abandoned).
+
+/**
+ * A template whose data lives in another module (docs/06-backend-api.md 3.x item 1): that module
+ * loads its record and renders the message; composition registers it, so this module never imports it.
+ */
+interface EmailDataSource {
+  load(c: pg.ClientBase, row: OutboxRow, t: Translate): Promise<MailMessage | null>;
+}
+
+export type EmailSources = Readonly<Record<string, EmailDataSource>>;
 
 export interface OutboxRow {
   template: string;
@@ -14,8 +26,6 @@ export interface OutboxRow {
   tenant_id: string | null;
   recipient: string | null;
 }
-
-type Translate = (key: MessageKey) => string;
 
 async function noticeMail(c: pg.ClientBase, row: OutboxRow, to: string, t: Translate) {
   if (!isNoticeTemplate(row.template)) {
@@ -54,9 +64,14 @@ export async function renderOutboxRow(
   c: pg.ClientBase,
   row: OutboxRow,
   t: Translate,
+  sources: EmailSources = {},
 ): Promise<MailMessage | null> {
   if (!row.recipient) {
     return null;
+  }
+  const source = sources[row.template];
+  if (source) {
+    return source.load(c, row, t);
   }
   if (isNoticeTemplate(row.template)) {
     return noticeMail(c, row, row.recipient, t);

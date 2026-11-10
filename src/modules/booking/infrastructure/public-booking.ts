@@ -8,6 +8,7 @@ import type { PeriodError } from "../domain/period-rules";
 import { normalizePhone } from "../domain/phone";
 import { price } from "../domain/pricing";
 import { readSettings, resolvePeriod, type BookingSettings } from "./availability";
+import { enqueueBookingCreated, type EmailStatus } from "./booking-emails";
 
 // BKG-02 prepare and BKG-03 submit (docs/06-backend-api.md 6.x, 5.2, 5.6). The
 // submit runs in one tenant transaction: idempotency lock + replay, vehicle row lock, rules and price
@@ -101,7 +102,7 @@ export async function prepareBooking(
 }
 
 export type SubmitResult =
-  | { ok: true; code: string; replayed: boolean }
+  | { ok: true; code: string; replayed: boolean; emailStatus?: EmailStatus }
   | {
       ok: false;
       code:
@@ -292,7 +293,13 @@ async function submitInTx(
   const booking = { ...checked.booking, customerId };
   const created = await insertBooking(c, booking);
   await auditCreated(c, booking, created);
-  return { ok: true, code: created.code, replayed: false };
+  const emailStatus = await enqueueBookingCreated(c, {
+    tenantId: ctx.tenantId,
+    bookingId: created.id,
+    customerEmail: input.email,
+    now: ctx.now,
+  });
+  return { ok: true, code: created.code, replayed: false, emailStatus };
 }
 
 /** BKG-03 (after the form token, honeypot and schema checks of the entry point). */

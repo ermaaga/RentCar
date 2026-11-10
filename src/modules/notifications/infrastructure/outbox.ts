@@ -7,7 +7,7 @@ import { withTenantTx } from "../../../platform/db/tenant-tx";
 import type { Mailer, SendResult } from "../../../platform/mailer/port";
 import type { NoticeTemplate } from "../application/notice-email";
 import type { RenewalTemplate } from "../application/renewal-email";
-import { renderOutboxRow } from "./outbox-render";
+import { renderOutboxRow, type EmailSources } from "./outbox-render";
 import { sendTenantMail } from "./tenant-mail";
 
 // Transactional outbox (docs/06-backend-api.md 9.3, 05-database 5.15). A row is enqueued inside the
@@ -24,8 +24,9 @@ const CREDENTIAL_UNDELIVERED_MS = 15 * 60_000;
 export interface EmailEnqueue {
   tenantId: string | null;
   channel: MailChannel;
-  template: NoticeTemplate | RenewalTemplate;
-  related: { type: "user" | "subscription"; id: string };
+  /** A notice or renewal template, or one registered by another module as an EmailDataSource. */
+  template: NoticeTemplate | RenewalTemplate | `booking.${string}`;
+  related: { type: "user" | "subscription" | "booking"; id: string };
   recipient: string;
   now: Date;
 }
@@ -75,6 +76,8 @@ export interface OutboxDeps {
   mailer: Mailer;
   fieldKeys: readonly Buffer[];
   t: (key: MessageKey) => string;
+  /** Templates rendered by other modules (registered in composition). */
+  sources?: EmailSources | undefined;
 }
 
 interface Claimed {
@@ -132,7 +135,9 @@ async function send(
   scope: OutboxScope,
   row: Claimed,
 ): Promise<{ result: SendResult; unusable: boolean }> {
-  const mail = await inScope(deps.pool, scope, (c) => renderOutboxRow(c, row, deps.t));
+  const mail = await inScope(deps.pool, scope, (c) =>
+    renderOutboxRow(c, row, deps.t, deps.sources),
+  );
   if (!mail) {
     return { result: { ok: false, category: "unknown" }, unusable: true };
   }
