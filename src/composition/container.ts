@@ -1,5 +1,8 @@
 import type pg from "pg";
 
+import { bookingEmailSources } from "../modules/booking";
+import type { EmailSources } from "../modules/notifications";
+
 import { systemClock, type Clock } from "../platform/clock";
 import { getConfig } from "../platform/config";
 import { deriveKey } from "../platform/crypto/keys";
@@ -31,6 +34,8 @@ export interface Container {
   trustedProxyCount: number;
   /** Signs the public booking form token (BKG-02/03). */
   formTokenKey: Buffer;
+  /** Outbox templates rendered by other modules (docs/06-backend-api.md 3.x item 1). */
+  emailSources: EmailSources;
 }
 
 let container: Container | undefined;
@@ -64,6 +69,7 @@ function build(): Container {
     ownerEmail: cfg.SYSTEM_ADMIN_EMAIL,
     trustedProxyCount: cfg.TRUSTED_PROXY_COUNT ?? 1,
     formTokenKey: deriveKey(cfg.APP_ENCRYPTION_KEY, "form-token"),
+    emailSources: bookingEmailSources(cfg.APP_BASE_URL.replace(/\/$/, "")),
   };
 }
 

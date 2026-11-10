@@ -1,4 +1,4 @@
-export { renderCredentialEmail } from "./application/credential-email";
+export { escapeHtml, renderCredentialEmail } from "./application/credential-email";
 export { smtpSettingsInput } from "./application/smtp-input";
 export { getSmtpSummary } from "./infrastructure/tenant-smtp";
 export { testSmtpSettings, updateSmtpSettings } from "./infrastructure/smtp-settings-service";
@@ -10,3 +10,4 @@ export {
   failStaleCredentialRows,
 } from "./infrastructure/outbox";
 export type { OutboxDeps, OutboxScope } from "./infrastructure/outbox";
+export type { EmailSources, OutboxRow } from "./infrastructure/outbox-render";

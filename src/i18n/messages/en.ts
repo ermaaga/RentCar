@@ -151,6 +151,26 @@ export const en = {
       "Your subscription has ended, so changes are paused. Contact the platform owner to renew.",
   },
   email: {
+    booking: {
+      confirmation: {
+        subject: "Booking {code} confirmed · {tenant}",
+        intro: "Hello {name}, your booking with {tenant} is confirmed.",
+        payment: "You pay when you collect the car.",
+        view: "See your booking:",
+        notYou: "If you did not make this booking, ignore this email and contact {tenant}.",
+      },
+      adminNew: {
+        subject: "New booking {code}",
+        intro: "A customer booked online.",
+        customer: "Customer",
+      },
+      code: "Booking code",
+      vehicle: "Car",
+      pickup: "Pickup",
+      return: "Return",
+      total: "Total",
+      contact: "Contact: {email}, {phone}",
+    },
     credential: {
       activation: {
         subject: "Set your RentCar password",

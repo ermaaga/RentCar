@@ -10,7 +10,13 @@ export function dispatchAfterResponse(scope: OutboxScope): void {
   after(async () => {
     const c = getContainer();
     await dispatchDue(
-      { pool: c.pool, mailer: c.mailer, fieldKeys: c.fieldKeys, t: getTranslator() },
+      {
+        pool: c.pool,
+        mailer: c.mailer,
+        fieldKeys: c.fieldKeys,
+        t: getTranslator(),
+        sources: c.emailSources,
+      },
       scope,
       c.clock.now(),
       5,

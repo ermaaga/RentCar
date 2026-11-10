@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 
+import { dispatchAfterResponse } from "@/app/_lib/outbox";
 import { loadPublicTenant, type PublicTenant } from "@/app/_lib/public-tenant";
 import { consume, requestIp } from "@/app/_lib/security";
 import { getContainer } from "@/composition/container";
@@ -45,6 +46,7 @@ function formValues(form: FormData): Record<string, unknown> {
 
 function outcome(result: SubmitResult, tenant: PublicTenant): BookingFormState {
   if (result.ok) {
+    if (!result.replayed) dispatchAfterResponse({ kind: "tenant", tenantId: tenant.tenantId });
     redirect(`/${tenant.slug}/booking/${result.code}`);
   }
   if (result.code === "PRICE_CHANGED") {

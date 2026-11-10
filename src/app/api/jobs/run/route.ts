@@ -80,6 +80,7 @@ async function run(request: RunRequest): Promise<NextResponse> {
         mailer: c.mailer,
         fieldKeys: c.fieldKeys,
         t: getTranslator(),
+        sources: c.emailSources,
         ownerEmail: c.ownerEmail,
       },
       elapsedMs: () => performance.now() - started,
