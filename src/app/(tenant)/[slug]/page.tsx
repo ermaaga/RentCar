@@ -7,7 +7,7 @@ import { defaultPeriod, parseSearchQuery } from "@/modules/booking";
 import { localDate } from "@/modules/subscriptions";
 
 import { asSearchError, searchErrorText } from "./_components/format";
-import { PublicShell, UnavailableNotice } from "./_components/public-shell";
+import { PublicShell, UnavailablePage } from "./_components/public-shell";
 import { SearchForm } from "./_components/search-form";
 
 // W-P1 tenant home and search (docs/04a-ux.md, FR-PUB-01/02). Indexing stays off until the SEO slice
@@ -32,13 +32,7 @@ export async function generateMetadata(props: Props): Promise<Metadata> {
 export default async function PublicHomePage(props: Props) {
   const t = getTranslator();
   const tenant = await loadPublicTenant((await props.params).slug);
-  if (tenant.unavailable) {
-    return (
-      <PublicShell tenant={tenant}>
-        <UnavailableNotice tenant={tenant} />
-      </PublicShell>
-    );
-  }
+  if (tenant.unavailable) return <UnavailablePage tenant={tenant} />;
   const params = await props.searchParams;
   const now = getContainer().clock.now();
   const parsed = parseSearchQuery(params);

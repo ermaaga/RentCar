@@ -75,7 +75,7 @@ export function PublicShell(props: { tenant: PublicTenant; children: ReactNode }
 }
 
 /** W-P5: the tenant exists but cannot take bookings (suspended, terminated or no valid plan). */
-export function UnavailableNotice({ tenant }: { tenant: PublicTenant }) {
+function UnavailableNotice({ tenant }: { tenant: PublicTenant }) {
   const t = getTranslator();
   const paused = tenant.unavailable === "paused";
   const title = paused
@@ -89,5 +89,14 @@ export function UnavailableNotice({ tenant }: { tenant: PublicTenant }) {
       <h1 className="text-2xl font-semibold">{title}</h1>
       <p>{body}</p>
     </div>
+  );
+}
+
+/** The whole page for a tenant that cannot take bookings. */
+export function UnavailablePage({ tenant }: { tenant: PublicTenant }) {
+  return (
+    <PublicShell tenant={tenant}>
+      <UnavailableNotice tenant={tenant} />
+    </PublicShell>
   );
 }

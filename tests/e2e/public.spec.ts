@@ -61,3 +61,47 @@ test("a customer searches, filters and sorts the available vehicles", async ({ p
   );
   expect((await page.goto("/no-such-tenant"))?.status()).toBe(404);
 });
+
+/** W-P3 form: details, the acknowledgement and the 3 s minimum fill time before submitting. */
+async function fillBookingForm(page: Page, phone: string): Promise<void> {
+  await page.getByLabel("First name").fill("Mario");
+  await page.getByLabel("Last name").fill("Rossi");
+  await page.getByLabel("Mobile phone").fill(phone);
+  await page.getByLabel("Email (optional)").fill("mario@rentcar.localhost");
+  await page.getByLabel("I have read the rental conditions and the privacy notice.").check();
+  await page.waitForTimeout(3_100);
+}
+
+test("a customer books a car and sees the confirmation with the code", async ({ page }, info) => {
+  const slug = `e2b-${info.project.name}-${Date.now().toString(36)}`.slice(0, 40);
+  await activatedAdmin(page, slug, `${slug}@rentcar.localhost`);
+  await page.getByRole("link", { name: "Vehicles" }).click();
+  await addVehicle(page, {
+    name: "Fiat Panda",
+    plate: "PB 003 CC",
+    category: "City car",
+    price: "40",
+  });
+
+  await page.goto(`/${slug}`);
+  await page.getByRole("button", { name: "Search available vehicles" }).click();
+  await page.getByRole("link", { name: "Select Fiat Panda" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Your booking" })).toBeVisible();
+  await expect(page.getByText("Total for 3 days: €120.00")).toBeVisible();
+  await expectAccessible(page);
+
+  await fillBookingForm(page, "333 123 4567");
+  await page.getByRole("button", { name: "Confirm booking" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Booking confirmed" })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/${slug}/booking/[0-9A-Z]{10}$`));
+  await expect(page.getByText("Thank you, Mario. Your booking is confirmed.")).toBeVisible();
+  await expect(page.getByRole("main")).not.toContainText("mario@rentcar.localhost");
+  await expectAccessible(page);
+
+  await page.goBack();
+  await page.reload();
+  await expect(page.getByRole("main").getByRole("alert")).toHaveText(
+    "This car was just booked by someone else. Choose another car.",
+  );
+  expect((await page.goto(`/${slug}/booking/0000000000`))?.status()).toBe(404);
+});

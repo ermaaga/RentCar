@@ -67,5 +67,7 @@ export const RATE_LIMITS = {
   smtpTest: { scope: "notify.smtp_test", limit: 5, windowMs: HOUR },
   credentialPeekIp: { scope: "auth.credential_peek.ip", limit: 60, windowMs: HOUR },
   publicSearch: { scope: "public.search", limit: 5, windowMs: 60_000 },
+  publicBookingSubmit: { scope: "public.booking_submit", limit: 10, windowMs: HOUR },
+  publicCodeMiss: { scope: "public.pdf_miss", limit: 10, windowMs: HOUR },
   jobAuthFailureIp: { scope: "job.auth_failure.ip", limit: 10, windowMs: 60_000 },
 } as const satisfies Record<string, RateLimitRule>;

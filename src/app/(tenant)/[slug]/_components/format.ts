@@ -63,3 +63,12 @@ export function searchErrorText(
     max: rules.maxRentalDays,
   });
 }
+
+export function money(minor: number, currency: string): string {
+  return new Intl.NumberFormat("en", { style: "currency", currency }).format(minor / 100);
+}
+
+export function daysText(n: number): string {
+  const t = getTranslator();
+  return n === 1 ? t("public.results.dayOne") : formatMessage(t("public.results.days"), { n });
+}

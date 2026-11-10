@@ -260,6 +260,19 @@ export const ENTRY_POINTS: readonly EntryPoint[] = [
   // Public booking site (BKG-01..05): tenant from the slug only, open to anyone by design.
   { id: "page:(tenant)/[slug]", realm: "public", writeClass: "read", reason: PUBLIC_SITE },
   { id: "page:(tenant)/[slug]/vehicles", realm: "public", writeClass: "read", reason: PUBLIC_SITE },
+  { id: "page:(tenant)/[slug]/book", realm: "public", writeClass: "read", reason: PUBLIC_SITE },
+  {
+    id: "page:(tenant)/[slug]/booking/[code]",
+    realm: "public",
+    writeClass: "read",
+    reason: PUBLIC_SITE,
+  },
+  {
+    id: action("public-booking", "submitBookingAction"),
+    realm: "public",
+    writeClass: "write",
+    reason: PUBLIC_SITE,
+  },
   { id: "page:(tenant)/[slug]/admin", realm: "tenant", minRole: "operator", writeClass: "read" },
   {
     id: "page:(tenant)/[slug]/admin/account",

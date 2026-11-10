@@ -24,17 +24,18 @@ export type SearchResult =
   | { ok: true; items: Offer[]; billedDays: number; timeZone: string }
   | { ok: false; code: PeriodError | "INVALID_LOCAL_TIME" };
 
-interface Settings {
+export interface BookingSettings {
   time_zone: string;
+  country_code: string;
   min_rental_days: number;
   max_rental_days: number;
   lead_time_minutes: number;
   buffer_minutes: number;
 }
 
-async function readSettings(c: pg.ClientBase, tenantId: string): Promise<Settings> {
-  const res = await c.query<Settings>(
-    `SELECT t.time_zone, s.min_rental_days, s.max_rental_days, s.lead_time_minutes, s.buffer_minutes
+export async function readSettings(c: pg.ClientBase, tenantId: string): Promise<BookingSettings> {
+  const res = await c.query<BookingSettings>(
+    `SELECT t.time_zone, t.country_code, s.min_rental_days, s.max_rental_days, s.lead_time_minutes, s.buffer_minutes
        FROM tenants t JOIN tenant_settings s ON s.tenant_id = t.id WHERE t.id = $1`,
     [tenantId],
   );
@@ -81,6 +82,30 @@ async function freeVehicles(
   return res.rows;
 }
 
+export type ResolvedPeriod =
+  | { ok: true; start: Date; end: Date; blockedUntil: Date; billedDays: number }
+  | { ok: false; code: PeriodError | "INVALID_LOCAL_TIME" };
+
+/** Tenant-local pickup/return -> instants, checked against the tenant rules (5.2). */
+export function resolvePeriod(
+  s: BookingSettings,
+  local: { pickup: string; return: string },
+  now: Date,
+): ResolvedPeriod {
+  const start = parseLocal(local.pickup, s.time_zone);
+  const end = parseLocal(local.return, s.time_zone);
+  if (!start || !end) return { ok: false, code: "INVALID_LOCAL_TIME" };
+  const rules = {
+    minRentalDays: s.min_rental_days,
+    maxRentalDays: s.max_rental_days,
+    leadTimeMinutes: s.lead_time_minutes,
+  };
+  const period = checkPeriod({ start, end }, rules, { now, timeZone: s.time_zone });
+  if (!period.ok) return period;
+  const blockedUntil = new Date(end.getTime() + s.buffer_minutes * 60_000);
+  return { ok: true, start, end, blockedUntil, billedDays: period.billedDays };
+}
+
 export async function searchAvailability(
   pool: pg.Pool,
   input: SearchInput,
@@ -88,17 +113,9 @@ export async function searchAvailability(
 ): Promise<SearchResult> {
   return withTenantTx(pool, ctx.tenantId, async (c) => {
     const s = await readSettings(c, ctx.tenantId);
-    const start = parseLocal(input.pickup, s.time_zone);
-    const end = parseLocal(input.return, s.time_zone);
-    if (!start || !end) return { ok: false, code: "INVALID_LOCAL_TIME" };
-    const rules = {
-      minRentalDays: s.min_rental_days,
-      maxRentalDays: s.max_rental_days,
-      leadTimeMinutes: s.lead_time_minutes,
-    };
-    const period = checkPeriod({ start, end }, rules, { now: ctx.now, timeZone: s.time_zone });
+    const period = resolvePeriod(s, input, ctx.now);
     if (!period.ok) return period;
-    const blockedUntil = new Date(end.getTime() + s.buffer_minutes * 60_000);
+    const { start, end, blockedUntil } = period;
     const rows = await freeVehicles(c, { tenantId: ctx.tenantId, start, blockedUntil, input });
     const items = rows.map((v) => ({
       id: v.id,

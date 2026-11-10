@@ -29,6 +29,8 @@ export interface Container {
   ownerEmail: string | undefined;
   /** Trusted hops for the client IP (SR-RL-02); 1 when unset outside production. */
   trustedProxyCount: number;
+  /** Signs the public booking form token (BKG-02/03). */
+  formTokenKey: Buffer;
 }
 
 let container: Container | undefined;
@@ -61,6 +63,7 @@ function build(): Container {
     smtpAllowPrivate: cfg.SMTP_DEV_ALLOW_PRIVATE,
     ownerEmail: cfg.SYSTEM_ADMIN_EMAIL,
     trustedProxyCount: cfg.TRUSTED_PROXY_COUNT ?? 1,
+    formTokenKey: deriveKey(cfg.APP_ENCRYPTION_KEY, "form-token"),
   };
 }
 

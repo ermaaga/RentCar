@@ -2,7 +2,12 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
-import { loadPublicTenant, searchAllowed, type PublicTenant } from "@/app/_lib/public-tenant";
+import {
+  loadPublicTenant,
+  publicPageMetadata,
+  searchAllowed,
+  type PublicTenant,
+} from "@/app/_lib/public-tenant";
 import { getContainer } from "@/composition/container";
 import { formatMessage, getTranslator } from "@/i18n";
 import {
@@ -17,7 +22,7 @@ import { OfferList } from "@/modules/booking/ui/offer-list";
 import { Alert } from "@/ui/alert";
 
 import { localLabel, searchErrorText } from "../_components/format";
-import { PublicShell, UnavailableNotice } from "../_components/public-shell";
+import { PublicShell, UnavailablePage } from "../_components/public-shell";
 
 // W-P2 results (docs/04a-ux.md, BKG-01, FR-PUB-03/04). The period is searched once (RL-01 counts it);
 // sort and filters then run on the loaded set. Invalid input goes back to the search form with the error.
@@ -30,12 +35,7 @@ interface Props {
 }
 
 export async function generateMetadata(props: Props): Promise<Metadata> {
-  const tenant = await loadPublicTenant((await props.params).slug);
-  const t = getTranslator();
-  return {
-    title: `${t("public.results.title")} · ${tenant.title}`,
-    robots: { index: false, follow: false },
-  };
+  return publicPageMetadata((await props.params).slug, "public.results.title");
 }
 
 function backToSearch(slug: string, error: string, period?: SearchQuery): never {
@@ -125,13 +125,7 @@ async function Results(props: { tenant: PublicTenant; query: SearchQuery }) {
 export default async function ResultsPage(props: Props) {
   const t = getTranslator();
   const tenant = await loadPublicTenant((await props.params).slug);
-  if (tenant.unavailable) {
-    return (
-      <PublicShell tenant={tenant}>
-        <UnavailableNotice tenant={tenant} />
-      </PublicShell>
-    );
-  }
+  if (tenant.unavailable) return <UnavailablePage tenant={tenant} />;
   const params = await props.searchParams;
   const parsed = parseSearchQuery(params);
   if (!parsed.ok) {
