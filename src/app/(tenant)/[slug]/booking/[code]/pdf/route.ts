@@ -6,6 +6,7 @@ import { getTranslator } from "@/i18n";
 import { renderConfirmationPdf } from "@/modules/booking";
 import { loadEffectiveAccess } from "@/modules/subscriptions";
 import { resolveTenantBySlug } from "@/modules/tenancy";
+import { createLogger } from "@/platform/logging";
 import { RATE_LIMITS } from "@/platform/rate-limit/postgres";
 
 // BKG-05 downloadConfirmationPdf (docs/06-backend-api.md 10.1 step 5, SR-PDF-02, ABU-M2-11): tenant
@@ -13,6 +14,8 @@ import { RATE_LIMITS } from "@/platform/rate-limit/postgres";
 // same 404 and counts towards RL-03; past the limit the answer is 429. Never cached, never indexed.
 
 export const dynamic = "force-dynamic";
+
+const logger = createLogger({ service: "rentcar-web" });
 
 const PRIVATE = {
   "Cache-Control": "private, no-store",
@@ -58,6 +61,7 @@ export async function GET(
     });
   }
   if (result.code === "PDF_UNAVAILABLE") {
+    logger.error({ event: "pdf.failed", tenant_id: tenantId }, "pdf.failed");
     return new NextResponse("PDF unavailable", { status: 503, headers: PRIVATE });
   }
   await consume(RATE_LIMITS.publicCodeMiss, identity, "public");

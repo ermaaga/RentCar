@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { singleLineText } from "../../../shared/text";
+
 // FLT-01/02 input (docs/06-backend-api.md): bounded text without control characters; the daily price is
 // entered in major units (e.g. 45.50) and stored in minor units; notes refuse anything that looks like a
 // payment card number (SR-VAL-11, SEC-5: no card numbers stored anywhere).
@@ -24,21 +26,7 @@ export const FUEL_TYPES = [
   "lpg_cng",
 ] as const;
 
-/** Control characters and bidi overrides are refused (SR-VAL-04); these fields are single-line. */
-function hasControl(value: string): boolean {
-  return Array.from(value).some((ch) => {
-    const code = ch.codePointAt(0) ?? 0;
-    const bidi = (code >= 0x202a && code <= 0x202e) || (code >= 0x2066 && code <= 0x2069);
-    return code < 0x20 || code === 0x7f || bidi;
-  });
-}
-const text = (min: number, max: number) =>
-  z
-    .string()
-    .trim()
-    .min(min)
-    .max(max)
-    .refine((v) => !hasControl(v), "control characters are not allowed");
+const text = (min: number, max: number) => singleLineText(min, max);
 
 /** 13 to 19 digits, possibly separated by spaces or dashes: treated as a card number. */
 function looksLikeCardNumber(value: string): boolean {

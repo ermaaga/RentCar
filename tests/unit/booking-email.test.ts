@@ -39,4 +39,11 @@ describe("booking emails", () => {
     expect(mail.subject).toBe("New booking AB12CD34EF");
     expect(mail.text).toContain("Customer: Mario Rossi, +393331234567");
   });
+
+  it("escapes a customer name carrying markup in the HTML part (ABU-M2-06)", () => {
+    const payload = '<img src=x onerror=alert(1)>"><svg/onload=1>';
+    const mail = renderAdminNewBooking("owner@example.test", { ...data, firstName: payload }, t);
+    expect(mail.html).not.toMatch(/<img|<svg/);
+    expect(mail.html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+  });
 });

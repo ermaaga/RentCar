@@ -49,7 +49,8 @@ export default async function ConfirmationPage(props: Props) {
   const t = getTranslator();
   const { slug, code } = await props.params;
   const tenant = await loadPublicTenant(slug);
-  const identity = `${tenant.tenantId}:${await requestIp()}`;
+  // Same RL-03 key as the PDF route (slug and IP), so misses on both count together.
+  const identity = `${tenant.slug}:${await requestIp()}`;
   if (await limitReached(RATE_LIMITS.publicCodeMiss, identity, "public")) notFound();
   const booking = await getPublicConfirmation(getContainer().pool, {
     tenantId: tenant.tenantId,

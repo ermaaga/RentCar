@@ -84,6 +84,21 @@ describe("public booking input", () => {
     expect(publicBookingInput.parse({ ...valid, email: "A@B.test" }).email).toBe("a@b.test");
   });
 
+  it("normalises names to NFC and refuses control and bidi characters (ABU-M2-05)", () => {
+    const decomposed = "Jose\u0301";
+    expect(publicBookingInput.parse({ ...valid, firstName: decomposed }).firstName).toBe(
+      "Jos\u00e9",
+    );
+    for (const bad of ["a\u0000b", "a\r\nBcc: x@y.test", "x\u202ey", "a\u2066b", "a\u0085b"]) {
+      expect(publicBookingInput.safeParse({ ...valid, lastName: bad }).success, bad).toBe(false);
+    }
+    expect(publicBookingInput.safeParse({ ...valid, firstName: "x".repeat(10_000) }).success).toBe(
+      false,
+    );
+    expect(publicBookingInput.safeParse({ ...valid, phone: ["+39", "333"] }).success).toBe(false);
+    expect(publicBookingInput.parse({ ...valid, firstName: "Zoë 🚗" }).firstName).toBe("Zoë 🚗");
+  });
+
   it("requires the acknowledgement and refuses unknown keys", () => {
     expect(publicBookingInput.safeParse({ ...valid, acknowledge: false }).success).toBe(false);
     expect(publicBookingInput.safeParse({ ...valid, website: "x" }).success).toBe(false);

@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { singleLineText } from "../../../shared/text";
+
 // Input of BKG-03 submitPublicBooking (docs/06-backend-api.md 6.x). Strict; the phone is normalised
 // to E.164 later with the tenant country, the honeypot is checked before this schema.
 
@@ -12,9 +14,10 @@ export const publicBookingInput = z
     pickup: localDateTime,
     return: localDateTime,
     expectedTotalMinor: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-    firstName: z.string().trim().min(1).max(80),
-    lastName: z.string().trim().min(1).max(80),
-    phone: z.string().trim().min(6).max(32),
+    // SR-VAL-04: NFC, no control characters or bidi overrides (ABU-M2-05).
+    firstName: singleLineText(1, 80),
+    lastName: singleLineText(1, 80),
+    phone: singleLineText(6, 32),
     email: z
       .union([z.literal(""), z.email().max(254)])
       .transform((v) => (v === "" ? undefined : v.toLowerCase())),

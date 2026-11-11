@@ -9,6 +9,7 @@ import { getContainer } from "@/composition/container";
 import { checkFormToken, publicBookingInput, submitPublicBooking } from "@/modules/booking";
 import type { SubmitResult } from "@/modules/booking";
 import type { BookingErrorCode, BookingFormState } from "@/modules/booking/ui/booking-form-state";
+import { createLogger } from "@/platform/logging";
 import { RATE_LIMITS } from "@/platform/rate-limit/postgres";
 
 // BKG-03 entry point (docs/06-backend-api.md): public by design (no account), the tenant comes from
@@ -16,6 +17,16 @@ import { RATE_LIMITS } from "@/platform/rate-limit/postgres";
 // RL-02 per tenant and IP, strict schema, then one tenant transaction. Success redirects to BKG-04.
 
 const DECOY: BookingFormState = { status: "received" };
+// Events of docs/12-osservabilita.md (booking SLI): ids and codes only, never customer data.
+const logger = createLogger({ service: "rentcar-web" });
+
+/** An error code safe to log: Postgres SQLSTATE or the error name, never the message or detail. */
+function errorCode(err: unknown): string {
+  if (typeof err === "object" && err !== null && "code" in err && typeof err.code === "string") {
+    return err.code;
+  }
+  return err instanceof Error ? err.name : "unknown";
+}
 const fail = (
   code: BookingErrorCode,
   extra: Partial<Extract<BookingFormState, { status: "error" }>> = {},
@@ -45,6 +56,12 @@ function formValues(form: FormData): Record<string, unknown> {
 }
 
 function outcome(result: SubmitResult, tenant: PublicTenant): BookingFormState {
+  const tenant_id = tenant.tenantId;
+  if (result.ok && !result.replayed) {
+    logger.info({ event: "booking.created", tenant_id, entity_id: result.code, outcome: "public" });
+  } else if (!result.ok && result.code === "VEHICLE_TAKEN") {
+    logger.warn({ event: "booking.conflict", tenant_id }, "booking.conflict");
+  }
   if (result.ok) {
     if (!result.replayed) dispatchAfterResponse({ kind: "tenant", tenantId: tenant.tenantId });
     redirect(`/${tenant.slug}/booking/${result.code}`);
@@ -59,6 +76,29 @@ function outcome(result: SubmitResult, tenant: PublicTenant): BookingFormState {
     "IDEMPOTENCY_KEY_REUSED",
   ];
   return fail(known.includes(result.code) ? (result.code as BookingErrorCode) : "EXPIRED");
+}
+
+type SubmitInput = Parameters<typeof submitPublicBooking>[1];
+type SubmitCtx = Parameters<typeof submitPublicBooking>[2];
+
+/** One booking attempt, logged for the SLI; an unexpected error is logged by code and becomes null. */
+async function submit(input: SubmitInput, ctx: SubmitCtx): Promise<SubmitResult | null> {
+  logger.info({ event: "public.booking.submitted", tenant_id: ctx.tenantId });
+  return submitPublicBooking(getContainer().pool, input, ctx).catch((err: unknown) => {
+    const fields = { tenant_id: ctx.tenantId, error_code: errorCode(err) };
+    logger.error({ event: "booking.failed", ...fields }, "booking.failed");
+    return null;
+  });
+}
+
+/** RL-02 per tenant and IP; fails closed (SR-RL-04, ABU-M2-02) with a friendly "try again". */
+async function submitLimit(tenantId: string): Promise<"FAILED" | "RATE_LIMITED" | null> {
+  const identity = `${tenantId}:${await requestIp()}`;
+  const allowed = await consume(RATE_LIMITS.publicBookingSubmit, identity, "public").catch(
+    () => null,
+  );
+  if (allowed === null) return "FAILED";
+  return allowed ? null : "RATE_LIMITED";
 }
 
 export async function submitBookingAction(
@@ -84,18 +124,16 @@ export async function submitBookingAction(
     return DECOY;
   }
   if (!token.ok) return fail("EXPIRED");
-  const ip = await requestIp();
-  if (!(await consume(RATE_LIMITS.publicBookingSubmit, `${tenant.tenantId}:${ip}`, "public"))) {
-    return fail("RATE_LIMITED");
-  }
+  const limited = await submitLimit(tenant.tenantId);
+  if (limited) return fail(limited);
   const parsed = publicBookingInput.safeParse(values);
   if (!parsed.success) {
     return fail("FORM_INVALID", { fields: parsed.error.issues.map((i) => String(i.path[0])) });
   }
-  const result = await submitPublicBooking(c.pool, parsed.data, {
+  const result = await submit(parsed.data, {
     tenantId: tenant.tenantId,
     idempotencyKey: token.idempotencyKey,
     now,
-  }).catch(() => null);
+  });
   return result ? outcome(result, tenant) : fail("FAILED");
 }
