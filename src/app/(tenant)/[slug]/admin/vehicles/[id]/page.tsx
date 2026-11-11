@@ -70,8 +70,7 @@ async function Photos({ slug, tenantId, v }: { slug: string; tenantId: string; v
   return (
     <PhotoManager
       vehicleName={v.name}
-      uploadUrl={`/${slug}/admin/vehicles/${v.id}/photos`}
-      maxBytes={c.uploadMaxBytes}
+      target={{ slug, vehicleId: v.id, maxBytes: c.uploadMaxBytes }}
       photos={photos.map((p) => ({
         id: p.id,
         small: p.small,

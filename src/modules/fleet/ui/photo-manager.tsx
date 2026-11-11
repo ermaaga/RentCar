@@ -5,7 +5,7 @@ import { useState, type ChangeEvent, type ReactNode } from "react";
 
 import { formatMessage, getTranslator, type MessageKey } from "../../../i18n";
 import { Alert } from "../../../ui/alert";
-import { uploadPhoto, type UploadOutcome } from "./photo-upload";
+import { uploadPhoto, type UploadOutcome, type UploadTarget } from "./photo-upload";
 
 // FLT-07/09/10 on the vehicle detail page (admin, writable tenant): pick one or more images, they are
 // uploaded one by one with progress announced, then the server list is refreshed.
@@ -38,7 +38,7 @@ function UploadStatus({ status }: { status: Status }) {
   );
 }
 
-function Uploader(props: { uploadUrl: string; maxBytes: number }) {
+function Uploader(props: { target: UploadTarget }) {
   const t = getTranslator();
   const router = useRouter();
   const [status, setStatus] = useState<Status>({ kind: "idle" });
@@ -48,7 +48,7 @@ function Uploader(props: { uploadUrl: string; maxBytes: number }) {
     let last: UploadOutcome = "ok";
     for (const [i, file] of files.entries()) {
       setStatus({ kind: "busy", n: i + 1, total: files.length });
-      last = await uploadPhoto(props.uploadUrl, file, props.maxBytes);
+      last = await uploadPhoto(props.target, file);
       if (last !== "ok") break;
     }
     setStatus({ kind: last });
@@ -93,8 +93,7 @@ function PhotoItem(props: { photo: ManagedPhoto; alt: string }) {
 
 export function PhotoManager(props: {
   vehicleName: string;
-  uploadUrl: string;
-  maxBytes: number;
+  target: UploadTarget;
   photos: readonly ManagedPhoto[];
 }) {
   const t = getTranslator();
@@ -104,9 +103,7 @@ export function PhotoManager(props: {
         {t("vehicles.photos.title")}
       </h2>
       <p className="text-muted-foreground">{t("vehicles.photos.intro")}</p>
-      {props.photos.length < 10 ? (
-        <Uploader uploadUrl={props.uploadUrl} maxBytes={props.maxBytes} />
-      ) : null}
+      {props.photos.length < 10 ? <Uploader target={props.target} /> : null}
       {props.photos.length === 0 ? <p>{t("vehicles.photos.empty")}</p> : null}
       <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {props.photos.map((p, i) => (

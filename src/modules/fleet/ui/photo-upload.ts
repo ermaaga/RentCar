@@ -33,15 +33,21 @@ async function downscale(file: File, maxBytes: number): Promise<Blob> {
   return blob ?? file;
 }
 
-export async function uploadPhoto(
-  url: string,
-  file: File,
-  maxBytes: number,
-): Promise<UploadOutcome> {
-  const body = await downscale(file, maxBytes);
-  if (body.size > maxBytes) return "tooLarge";
+export interface UploadTarget {
+  slug: string;
+  vehicleId: string;
+  maxBytes: number;
+}
+
+/** POSTs to this site's own FLT-07 route, built from the tenant slug and the vehicle id. */
+export async function uploadPhoto(target: UploadTarget, file: File): Promise<UploadOutcome> {
+  const body = await downscale(file, target.maxBytes);
+  if (body.size > target.maxBytes) return "tooLarge";
   try {
-    const res = await fetch(url, { method: "POST", body, credentials: "same-origin" });
+    const res = await fetch(
+      `/${encodeURIComponent(target.slug)}/admin/vehicles/${encodeURIComponent(target.vehicleId)}/photos`,
+      { method: "POST", body, credentials: "same-origin" },
+    );
     if (res.ok) return "ok";
     const data = (await res.json().catch(() => ({}))) as { code?: string };
     return BY_CODE[data.code ?? ""] ?? "failed";
