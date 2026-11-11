@@ -8,15 +8,16 @@ interface SelectFieldProps extends SelectHTMLAttributes<HTMLSelectElement> {
   error?: string | undefined;
 }
 
-export function SelectField({ name, label, options, error, ...select }: SelectFieldProps) {
-  const errorId = error ? `${name}-error` : undefined;
+export function SelectField({ name, label, options, error, id, ...select }: SelectFieldProps) {
+  const fieldId = id ?? name; // an explicit id when the same field repeats on one page
+  const errorId = error ? `${fieldId}-error` : undefined;
   return (
     <div className="flex flex-col gap-1">
-      <label htmlFor={name} className="font-medium">
+      <label htmlFor={fieldId} className="font-medium">
         {label}
       </label>
       <select
-        id={name}
+        id={fieldId}
         name={name}
         aria-invalid={error ? true : undefined}
         aria-describedby={errorId}

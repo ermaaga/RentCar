@@ -3,8 +3,8 @@ import sharp from "sharp";
 
 import { activatedAdmin, addVehicle, expectAccessible } from "./helpers";
 
-// FLT-07/09/10 end to end (US-040, ABU-M2-14..17): the admin uploads photos on the vehicle page, moves
-// the cover and deletes one; the public results show the cover, served by /media with class M headers.
+// FLT-07/08/09/10 end to end (US-040, ABU-M2-14..17): the admin uploads photos on the vehicle page,
+// reorders them, moves the cover and deletes one; the public results show the cover, served by /media with class M headers.
 
 function photo(colour: string): Promise<Buffer> {
   return sharp({ create: { width: 3000, height: 2000, channels: 3, background: colour } })
@@ -57,9 +57,15 @@ test("admin manages vehicle photos and the cover shows on the public page", asyn
   await expect(photos.first()).toContainText("Cover photo");
   await expectAccessible(page);
 
-  await photos.nth(1).getByRole("button", { name: "Make cover" }).click();
+  await photos.nth(1).getByLabel("Position of photo 2").selectOption("1");
+  await photos.nth(1).getByRole("button", { name: "Move photo 2" }).click();
+  await expect(photos.first().getByRole("status")).toHaveText("Photo order saved.");
   await expect(photos.nth(1)).toContainText("Cover photo");
-  await photos.first().getByRole("button", { name: "Delete photo" }).click();
+  await expect(photos.first()).not.toContainText("Cover photo");
+
+  await photos.first().getByRole("button", { name: "Make cover" }).click();
+  await expect(photos.first()).toContainText("Cover photo");
+  await photos.nth(1).getByRole("button", { name: "Delete photo" }).click();
   await expect(photos).toHaveCount(1);
 
   await page.getByLabel("Add photos").setInputFiles({

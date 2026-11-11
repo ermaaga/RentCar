@@ -84,7 +84,7 @@ export const adminMessages = {
     photos: {
       title: "Photos",
       intro:
-        "Up to 10 photos: JPEG, PNG or WebP. The cover photo is the one shown on your public page.",
+        "Up to 10 photos: JPEG, PNG or WebP. The cover photo is the one shown on your public page. Change a photo's position to reorder them.",
       empty: "No photos yet.",
       choose: "Add photos",
       uploading: "Uploading {n} of {total}…",
@@ -96,6 +96,10 @@ export const adminMessages = {
       removed: "Photo deleted.",
       alt: "Photo {n} of {name}",
       notFound: "That photo no longer exists.",
+      position: "Position of photo {n}",
+      move: "Move photo {n}",
+      moved: "Photo order saved.",
+      orderStale: "The photos changed in the meantime. Reload the page and try again.",
       error: {
         type: "Use a JPEG, PNG or WebP image.",
         tooLarge: "That image is too large. Use one under 4 MB.",

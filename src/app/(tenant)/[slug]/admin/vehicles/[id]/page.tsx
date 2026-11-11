@@ -2,7 +2,11 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { requireTenantSession, tenantWriteRefusal } from "@/app/_lib/session";
-import { deletePhotoAction, setCoverPhotoAction } from "@/app/actions/vehicle-photos";
+import {
+  deletePhotoAction,
+  reorderPhotosAction,
+  setCoverPhotoAction,
+} from "@/app/actions/vehicle-photos";
 import {
   removeVehicleAction,
   setMaintenanceAction,
@@ -15,6 +19,7 @@ import { PhotoManager } from "@/modules/fleet/ui/photo-manager";
 import { VehicleForm } from "@/modules/fleet/ui/vehicle-form";
 import { ConsoleActionForm } from "@/modules/tenancy/ui/console-action-form";
 import { Alert } from "@/ui/alert";
+import { SelectField } from "@/ui/select-field";
 
 export const dynamic = "force-dynamic";
 
@@ -64,19 +69,50 @@ function AdminControls({ slug, v }: { slug: string; v: VehicleRow }) {
   );
 }
 
+/** FLT-08: one position select per photo; the form stays on its photo, so the outcome is announced. */
+function MoveControl(props: { slug: string; vehicleId: string; ids: string[]; index: number }) {
+  const t = getTranslator();
+  const n = String(props.index + 1);
+  const photoId = props.ids[props.index] ?? "";
+  const options = props.ids.map((_, i) => ({ value: String(i + 1), label: String(i + 1) }));
+  return (
+    <ConsoleActionForm
+      action={reorderPhotosAction.bind(null, props.slug, {
+        vehicleId: props.vehicleId,
+        seenIds: props.ids,
+        photoId,
+      })}
+      submit="vehicles.photos.move"
+      submitParams={{ n }}
+    >
+      <SelectField
+        id={`position-${photoId}`}
+        name="position"
+        label={formatMessage(t("vehicles.photos.position"), { n })}
+        options={options}
+        defaultValue={n}
+      />
+    </ConsoleActionForm>
+  );
+}
+
 async function Photos({ slug, tenantId, v }: { slug: string; tenantId: string; v: VehicleRow }) {
   const c = getContainer();
   const photos = await listVehiclePhotos(c.pool, { tenantId, vehicleId: v.id });
+  const ids = photos.map((p) => p.id);
   return (
     <PhotoManager
       vehicleName={v.name}
       target={{ slug, vehicleId: v.id, maxBytes: c.uploadMaxBytes }}
-      photos={photos.map((p) => ({
+      photos={photos.map((p, index) => ({
         id: p.id,
         small: p.small,
         isCover: p.isCover,
         controls: (
           <>
+            {ids.length > 1 ? (
+              <MoveControl slug={slug} vehicleId={v.id} ids={ids} index={index} />
+            ) : null}
             {p.isCover ? null : (
               <ConsoleActionForm
                 action={setCoverPhotoAction.bind(null, slug, v.id, p.id)}

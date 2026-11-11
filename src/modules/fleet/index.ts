@@ -14,12 +14,14 @@ export {
   vehicleUsage,
 } from "./infrastructure/vehicles";
 export type { VehicleRow } from "./infrastructure/vehicles";
+export { moveTo, parseOrderedIds } from "./domain/photo-order";
 export {
   addVehiclePhoto,
   deletePhoto,
   listVehiclePhotos,
   photoUrl,
   removePhotoObjects,
+  reorderPhotos,
   setCoverPhoto,
 } from "./infrastructure/photos";
 export type { PhotoDeps } from "./infrastructure/photos";

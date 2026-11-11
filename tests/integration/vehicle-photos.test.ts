@@ -10,6 +10,7 @@ import {
   deletePhoto,
   listVehiclePhotos,
   removeVehicle,
+  reorderPhotos,
   setCoverPhoto,
   type PhotoDeps,
 } from "../../src/modules/fleet";
@@ -17,7 +18,7 @@ import { createLocalStorage } from "../../src/platform/storage/local";
 import type { StoragePort } from "../../src/platform/storage/port";
 import { addShop, addVehicle, now } from "../support/booking-fixtures";
 
-// Vehicle photos FLT-07/09/10 (docs/06-backend-api.md 10.3, ABU-M2-14..17) against Postgres + disk.
+// Vehicle photos FLT-07/08/09/10 (docs/06-backend-api.md 10.3, ABU-M2-14..17) against Postgres + disk.
 const adminUrl = process.env.TEST_DATABASE_ADMIN_URL;
 const appUrl = process.env.TEST_DATABASE_URL;
 const admin = new pg.Pool({ connectionString: adminUrl, max: 2 });
@@ -148,5 +149,48 @@ db("vehicle photos: cover and delete (FLT-09/10, FLT-04)", () => {
     expect(await listVehiclePhotos(app, { tenantId: scope.tenantId, vehicleId: extra })).toEqual(
       [],
     );
+  });
+});
+
+db("vehicle photos: reorder (FLT-08)", () => {
+  it("saves a permutation and keeps the cover on its photo", async () => {
+    const scope = await addShop(admin);
+    const [p0, p1, p2] = [await upload(scope), await upload(scope), await upload(scope)];
+    const result = await reorderPhotos(app, scope, [p2.id, p0.id, p1.id]);
+    expect(result.ok && result.photos.map((p) => [p.id, p.position, p.isCover])).toEqual([
+      [p2.id, 0, false],
+      [p0.id, 1, true],
+      [p1.id, 2, false],
+    ]);
+  });
+
+  it("refuses a list that is not exactly the vehicle's photos and changes nothing", async () => {
+    const scope = await addShop(admin);
+    const [p0, p1] = [await upload(scope), await upload(scope)];
+    const other = await addShop(admin);
+    const foreign = await upload(other);
+    for (const ids of [[p0.id], [p0.id, p0.id], [p1.id, foreign.id], [p1.id, p0.id, foreign.id]]) {
+      expect(await reorderPhotos(app, scope, ids)).toEqual({
+        ok: false,
+        code: "VALIDATION_FAILED",
+      });
+    }
+    expect((await listVehiclePhotos(app, scope)).map((p) => p.id)).toEqual([p0.id, p1.id]);
+    expect(await reorderPhotos(app, other, [p1.id, p0.id])).toEqual({
+      ok: false,
+      code: "VALIDATION_FAILED",
+    });
+  });
+
+  it("reports a vehicle of another tenant as not found", async () => {
+    const scope = await addShop(admin);
+    const p0 = await upload(scope);
+    const other = await addShop(admin);
+    const result = await reorderPhotos(
+      app,
+      { tenantId: other.tenantId, vehicleId: scope.vehicleId },
+      [p0.id],
+    );
+    expect(result).toEqual({ ok: false, code: "NOT_FOUND" });
   });
 });

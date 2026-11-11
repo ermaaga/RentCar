@@ -4,14 +4,14 @@ import type pg from "pg";
 import { withTenantTx } from "../../../platform/db/tenant-tx";
 import { processImage, type ImageError } from "../../../platform/image/processor";
 import type { StoragePort } from "../../../platform/storage/port";
+import { isPermutation, MAX_PHOTOS } from "../domain/photo-order";
 
-// Vehicle photos FLT-07/09/10 (docs/06-backend-api.md 10.3): the image is checked and re-encoded into
+// Vehicle photos FLT-07/08/09/10 (docs/06-backend-api.md 10.3): the image is checked and re-encoded into
 // 480 px and 1280 px WebP; keys come from server-side ids only; objects are put first, then one tenant
 // transaction (vehicle row locked: at most 10 photos, tenant quota) inserts the row; a refusal or a
 // failure deletes the new objects. Deleted photos lose their objects after commit.
 
 const SIZES = [480, 1280] as const;
-const MAX_PHOTOS = 10;
 
 export interface PhotoDto {
   id: string;
@@ -227,6 +227,44 @@ export async function setCoverPhoto(
     );
     await c.query("UPDATE vehicle_photos SET is_cover = true WHERE id = $1", [photoId]);
     return rows(c, scope);
+  });
+}
+
+export type ReorderResult =
+  { ok: true; photos: PhotoDto[] } | { ok: false; code: "NOT_FOUND" | "VALIDATION_FAILED" };
+
+/**
+ * FLT-08: `orderedIds` must be a permutation of the vehicle's photos. The vehicle row is locked so an
+ * upload or delete running at the same time cannot slip in; the unique position constraint is
+ * deferred, so every row is renumbered in one statement and checked at commit.
+ */
+export async function reorderPhotos(
+  pool: pg.Pool,
+  scope: Scope,
+  orderedIds: readonly string[],
+): Promise<ReorderResult> {
+  return withTenantTx(pool, scope.tenantId, async (c): Promise<ReorderResult> => {
+    const locked = await c.query(
+      "SELECT 1 FROM vehicles WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+      [scope.tenantId, scope.vehicleId],
+    );
+    if ((locked.rowCount ?? 0) === 0) return { ok: false, code: "NOT_FOUND" };
+    const current = await rows(c, scope);
+    if (
+      !isPermutation(
+        current.map((p) => p.id),
+        orderedIds,
+      )
+    ) {
+      return { ok: false, code: "VALIDATION_FAILED" };
+    }
+    await c.query(
+      `UPDATE vehicle_photos p SET position = o.ord - 1
+         FROM unnest($3::uuid[]) WITH ORDINALITY AS o(id, ord)
+        WHERE p.tenant_id = $1 AND p.vehicle_id = $2 AND p.id = o.id`,
+      [scope.tenantId, scope.vehicleId, orderedIds],
+    );
+    return { ok: true, photos: await rows(c, scope) };
   });
 }
 

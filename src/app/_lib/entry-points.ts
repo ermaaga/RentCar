@@ -236,10 +236,11 @@ export const ENTRY_POINTS: readonly EntryPoint[] = [
   tenantEntry("page:(tenant)/[slug]/admin/operators", "admin", "read"),
   tenantEntry("page:(tenant)/[slug]/admin/vehicles", "operator", "read"),
   tenantEntry("page:(tenant)/[slug]/admin/vehicles/[id]", "operator", "read"),
-  // Vehicle photos (FLT-07/09/10): admin of a writable tenant; /media serves only public variants.
+  // Vehicle photos (FLT-07/08/09/10): admin of a writable tenant; /media serves only public variants.
   tenantEntry("route:(tenant)/[slug]/admin/vehicles/[id]/photos", "admin", "write"),
   tenantEntry(action("vehicle-photos", "setCoverPhotoAction"), "admin", "write"),
   tenantEntry(action("vehicle-photos", "deletePhotoAction"), "admin", "write"),
+  tenantEntry(action("vehicle-photos", "reorderPhotosAction"), "admin", "write"),
   {
     id: "route:media/[...key]",
     realm: "public",
