@@ -272,6 +272,7 @@ function ClearButton(props: { filter: OfferFilter; set: SetFilter; label: Messag
   );
 }
 
+/** Toolbar, then the count as the H2 over the cards (H1 > H2 > H3), announced when filters change. */
 export function OfferList(props: OfferListProps) {
   const t = getTranslator();
   const [filter, setFilter] = useState<OfferFilter>(props.initial);
@@ -289,9 +290,9 @@ export function OfferList(props: OfferListProps) {
   return (
     <div className="flex flex-col gap-4">
       <Toolbar {...props} filter={filter} set={set} />
-      <p role="status" className="font-semibold">
-        {count}
-      </p>
+      <h2 className="text-lg font-semibold">
+        <span role="status">{count}</span>
+      </h2>
       {shown.length === 0 ? (
         <div className="flex flex-col items-start gap-2">
           <p>{t("public.results.emptyFiltered")}</p>

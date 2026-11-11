@@ -32,6 +32,6 @@ This covers the "SEO checks" item of the M2 Definition of Done (`13-piano-implem
 | S1 | `og:image` (1200×630 JPEG from the logo) and `twitter:card=summary_large_image` | Deferred to M5 with the branding and logo upload; `twitter:card=summary` until then |
 | S2 | `X-Robots-Tag` on the unknown-slug 404 and on the suspended or closed root: meta tag only. The proxy has no tenant state and FE-1 rules out a per-request status query | Accepted (low): the meta tag is honoured by search engines; the 404 status alone keeps the page out |
 | S3 | An uppercase variant of an unknown slug answers 301 and then 404 (09-seo §3 wants a direct 404); the proxy does not query the database | Accepted (low) |
-| S4 | Lighthouse CI on `/{slug}` (NFR-PERF-01, SR-14) | Open: needs the Compose stack in CI or staging |
+| S4 | Lighthouse CI on `/{slug}` (NFR-PERF-01, SR-14) | **Done locally** (`docs/test-reports/m2-performance.md`); nightly workflow `nightly-perf.yml`; staging run still open |
 | S5 | Rich Results Test and schema.org validator on the JSON-LD | Open: go-live audit (needs a public URL) |
 | S6 | SR-10 host policy and custom domains | Not built (design only, FR-PLT-04) |

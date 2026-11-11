@@ -54,6 +54,23 @@ services:
         condition: service_completed_successfully
     restart: "no"
 
+  # Performance fixture (tenant perf-rent, 30 vehicles with photos) for the JS budget and Lighthouse
+  # (docs/10-test-plan.md section 10). Profile `perf`; needs the seed (platform owner) and the storage.
+  seed-perf:
+    <<: *app-image
+    profiles: ["perf"]
+    command: ["node", "dist-scripts/seed-perf.mjs"]
+    environment:
+      APP_ENV: local
+      DATABASE_URL: ${DATABASE_URL:-postgres://rentcar_app:INSECURE_DEV_app_role@postgres:5432/rentcar}
+      STORAGE_LOCAL_DIR: /data/storage
+    volumes:
+      - storage:/data/storage
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    restart: "no"
+
   mailpit:
     image: axllent/mailpit:v1.21.8@sha256:81370195cd4a0eab9604d17c2617a7525b0486f9365555253b6c5376c6350f1a
     profiles: ["mail"]

@@ -1,0 +1,54 @@
+# Nightly Lighthouse CI on the public pages (NFR-PERF-01; docs/10-test-plan.md section 10, docs/07-frontend.md
+# 13.1): the Compose stack with the perf-rent fixture (30 vehicles), mobile profile, median of 5 runs.
+# Not a PR gate (timings vary on shared runners); a red run opens no merge block but blocks milestone close.
+# Reports are kept as an artifact only; nothing is uploaded to a third-party server.
+name: nightly-perf
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-perf
+  cancel-in-progress: true
+
+jobs:
+  lighthouse:
+    name: Lighthouse CI (public root and results)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      COMPOSE_PROFILES: seed,mail,perf
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Start the stack with the perf fixture
+        run: |
+          cp .env.example .env
+          docker compose up -d --build
+      - name: Wait for the app and the fixture
+        run: |
+          curl --fail --silent --retry 40 --retry-delay 5 --retry-all-errors http://127.0.0.1:3000/api/readyz
+          docker compose wait seed-perf
+      - name: Lighthouse CI (pinned version, reports on disk)
+        env:
+          LHCI_BASE_URL: http://127.0.0.1:3000
+        run: npx --yes @lhci/cli@0.16.0 autorun --config=tests/perf/lighthouserc.cjs
+      - name: Upload the reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: lighthouse-report
+          path: lighthouse-report/
+          retention-days: 14
+      - name: Stop the stack
+        if: always()
+        run: docker compose down -v

@@ -156,12 +156,14 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
-      - name: Start the stack
+      - name: Start the stack (with the perf-rent fixture for the JS budget)
         run: |
           cp .env.example .env
-          docker compose up -d --build
-      - name: Wait for the app
-        run: curl --fail --silent --retry 40 --retry-delay 5 --retry-all-errors http://127.0.0.1:3000/api/readyz
+          COMPOSE_PROFILES=seed,mail,perf docker compose up -d --build
+      - name: Wait for the app and the fixture
+        run: |
+          curl --fail --silent --retry 40 --retry-delay 5 --retry-all-errors http://127.0.0.1:3000/api/readyz
+          COMPOSE_PROFILES=seed,mail,perf docker compose wait seed-perf
       - run: pnpm run test:e2e
       - name: Upload report on failure
         if: failure()

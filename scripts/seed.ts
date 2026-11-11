@@ -8,14 +8,11 @@ import pg from "pg";
 import { hashPassword } from "../src/platform/crypto/password";
 import { withSystemTx } from "../src/platform/db/system-tx";
 
-const ALLOWED_ENVS = new Set(["local", "ci"]);
-const DEFAULT_PASSWORD = "INSECURE_DEV_owner_password";
+import { assertSeedAllowed } from "./seed-guard";
 
-export function assertSeedAllowed(appEnv: string | undefined): void {
-  if (appEnv === undefined || !ALLOWED_ENVS.has(appEnv)) {
-    throw new Error(`seed refused: APP_ENV must be "local" or "ci" (got "${appEnv ?? "unset"}")`);
-  }
-}
+export { assertSeedAllowed };
+
+const DEFAULT_PASSWORD = "INSECURE_DEV_owner_password";
 
 async function seedOwner(pool: pg.Pool, pepper: string, password: string): Promise<boolean> {
   const hash = await hashPassword(password, pepper);
