@@ -74,6 +74,7 @@ services:
       CRON_SECRET: ${CRON_SECRET:-INSECURE_DEV_cron_secret_change_me_32chars_min}
       PASSWORD_PEPPER: ${PASSWORD_PEPPER:-INSECURE_DEV_password_pepper_change_me_32chars}
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
+      PUBLIC_INDEXING_ENABLED: ${PUBLIC_INDEXING_ENABLED:-false}
       SYSTEM_SMTP_HOST: ${SYSTEM_SMTP_HOST:-mailpit}
       SYSTEM_SMTP_PORT: ${SYSTEM_SMTP_PORT:-1025}
       SYSTEM_SMTP_SECURITY: ${SYSTEM_SMTP_SECURITY:-none}

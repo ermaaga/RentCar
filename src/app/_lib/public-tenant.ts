@@ -6,6 +6,7 @@ import { getContainer } from "@/composition/container";
 import { getTranslator, type MessageKey } from "@/i18n";
 import { canTakeBookings, loadEffectiveAccess } from "@/modules/subscriptions";
 import {
+  canonicalUrl,
   getPublicTenantSettings,
   resolveTenantBySlug,
   type PublicTenantSettings,
@@ -53,11 +54,24 @@ export async function searchAllowed(tenantId: string): Promise<boolean> {
   }
 }
 
-/** "<page title> · <tenant title>", never indexed (FR-PUB-14 default). */
-export async function publicPageMetadata(slug: string, title: MessageKey): Promise<Metadata> {
+/** The tenant root URL from APP_BASE_URL (09-seo SR-03); every public page points its canonical here. */
+export function tenantCanonical(slug: string): string {
+  return canonicalUrl(getContainer().baseUrl, slug);
+}
+
+/**
+ * "<page title> · <tenant title>" for a public page below the root: never indexed, canonical to the
+ * root (09-seo section 5). Results keep `follow`; the booking form and confirmation do not.
+ */
+export async function publicPageMetadata(
+  slug: string,
+  title: MessageKey,
+  follow = false,
+): Promise<Metadata> {
   const tenant = await loadPublicTenant(slug);
   return {
     title: `${getTranslator()(title)} · ${tenant.title}`,
-    robots: { index: false, follow: false },
+    robots: { index: false, follow },
+    alternates: { canonical: tenantCanonical(tenant.slug) },
   };
 }

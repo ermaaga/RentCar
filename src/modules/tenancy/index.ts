@@ -1,4 +1,10 @@
 export { checkSlug } from "./domain/slug";
+export {
+  autoRentalJsonLd,
+  canonicalUrl,
+  rootDescription,
+  serializeJsonLd,
+} from "./domain/public-seo";
 export { createTenantInput } from "./application/create-tenant-input";
 export { provisionTenant } from "./infrastructure/provisioning";
 export { listTenants, resolveTenantBySlug } from "./infrastructure/queries";

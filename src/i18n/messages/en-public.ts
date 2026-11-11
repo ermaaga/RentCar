@@ -1,6 +1,11 @@
 // Public booking site (docs/04a-ux.md 7.P, 8.3), split from en.ts for size. Same key rule (03b 13).
 export const publicMessages = {
   public: {
+    seo: {
+      rootTitle: "{tenant} | Car rental",
+      rootDescription:
+        "Book a rental car with {tenant}. Choose your pickup and return dates, see available cars and pay on site.",
+    },
     nav: {
       contact: "Contact",
       privacy: "Privacy notice",

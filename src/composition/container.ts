@@ -23,6 +23,8 @@ export interface Container {
   peppers: readonly string[];
   hmacKey: Buffer;
   baseUrl: string;
+  /** PUBLIC_INDEXING_ENABLED (09-seo SR-06): only then can a tenant root page be indexed. */
+  publicIndexing: boolean;
   secureCookies: boolean;
   cronSecret: string;
   jobsBudgetMs: number;
@@ -69,6 +71,7 @@ function build(): Container {
     peppers: [cfg.PASSWORD_PEPPER],
     hmacKey: deriveKey(cfg.APP_ENCRYPTION_KEY, "ratelimit"),
     baseUrl: cfg.APP_BASE_URL.replace(/\/$/, ""),
+    publicIndexing: cfg.PUBLIC_INDEXING_ENABLED,
     secureCookies: cookiesMustBeSecure(cfg.APP_ENV, cfg.APP_BASE_URL),
     cronSecret: cfg.CRON_SECRET,
     jobsBudgetMs: cfg.JOBS_TIME_BUDGET_MS,

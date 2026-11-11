@@ -31,6 +31,19 @@ function envKeysInExample(): string[] {
     .filter((key) => !COMPOSE_ONLY.includes(key));
 }
 
+describe("PUBLIC_INDEXING_ENABLED", () => {
+  it("defaults to false", () => {
+    expect(loadConfig(localEnv).PUBLIC_INDEXING_ENABLED).toBe(false);
+  });
+
+  it("enables public indexing only for the exact value true (SR-06 fails closed)", () => {
+    expect(
+      loadConfig({ ...localEnv, PUBLIC_INDEXING_ENABLED: "true" }).PUBLIC_INDEXING_ENABLED,
+    ).toBe(true);
+    expect(() => loadConfig({ ...localEnv, PUBLIC_INDEXING_ENABLED: "yes" })).toThrow(ConfigError);
+  });
+});
+
 describe("loadConfig", () => {
   it("accepts a local configuration and applies defaults", () => {
     const cfg = loadConfig(localEnv);

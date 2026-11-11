@@ -35,7 +35,7 @@ interface Props {
 }
 
 export async function generateMetadata(props: Props): Promise<Metadata> {
-  return publicPageMetadata((await props.params).slug, "public.results.title");
+  return publicPageMetadata((await props.params).slug, "public.results.title", true);
 }
 
 function backToSearch(slug: string, error: string, period?: SearchQuery): never {
