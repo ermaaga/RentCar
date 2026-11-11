@@ -12,3 +12,4 @@ docs
 tests
 *.md
 !README.md
+.storage

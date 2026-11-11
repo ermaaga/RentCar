@@ -33,10 +33,11 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   // PDF fonts are read from disk at runtime (10.1): ship them with the standalone output.
   outputFileTracingIncludes: { "/[slug]/booking/[code]/pdf": ["./assets/fonts/*"] },
-  serverExternalPackages: ["@react-pdf/renderer"],
+  serverExternalPackages: ["@react-pdf/renderer", "sharp"],
   reactStrictMode: true,
   headers() {
-    return Promise.resolve([{ source: "/:path*", headers: securityHeaders }]);
+    // /media answers with its own stricter class M headers (sandboxed CSP, immutable cache).
+    return Promise.resolve([{ source: "/:path((?!media/).*)", headers: securityHeaders }]);
   },
 };
 

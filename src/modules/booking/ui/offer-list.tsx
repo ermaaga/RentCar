@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { formatMessage, getTranslator, type MessageKey } from "../../../i18n";
+import { OfferCover } from "./offer-cover";
 import { applyOfferFilter, offerQueryString, type Offer, type OfferFilter } from "../domain/offers";
 
 // W-P2 results and W-P2b filters (docs/04a-ux.md): the loaded set is filtered and sorted in the browser
@@ -54,12 +55,7 @@ function OfferCard(props: { offer: Offer; href: string; currency: string }) {
   });
   return (
     <li className="flex flex-col gap-2 rounded-md border border-border p-4">
-      <div
-        aria-hidden="true"
-        className="flex aspect-[4/3] items-center justify-center rounded-md border border-dashed border-border text-sm"
-      >
-        {t("public.results.noPhoto")}
-      </div>
+      <OfferCover url={o.coverUrl} />
       <h3 className="text-lg font-semibold">{o.name}</h3>
       <p className="text-sm">{facts}</p>
       <p>

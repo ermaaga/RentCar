@@ -1,5 +1,6 @@
 import { join } from "node:path";
 
+import { createLimiter, withTimeout } from "../concurrency/limiter";
 import { Document, Font, Page, renderToBuffer, StyleSheet, Text, View } from "@react-pdf/renderer";
 
 // PdfRenderer (docs/06-backend-api.md 10.1 step 3, ADR-0006, SR-PDF-01/03): lays out preformatted
@@ -84,42 +85,10 @@ function SummaryPdf({ doc }: { doc: SummaryDocument }) {
   );
 }
 
-let running = 0;
-const waiting: (() => void)[] = [];
-
-async function acquire(): Promise<void> {
-  if (running < MAX_CONCURRENT) {
-    running += 1;
-    return;
-  }
-  await new Promise<void>((resolve) => waiting.push(resolve));
-}
-
-function release(): void {
-  const next = waiting.shift();
-  if (next) next();
-  else running -= 1;
-}
-
-function withTimeout<T>(promise: Promise<T>): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      reject(new Error("pdf render timeout"));
-    }, TIMEOUT_MS);
-  });
-  return Promise.race([promise, timeout]).finally(() => {
-    clearTimeout(timer);
-  });
-}
+const limiter = createLimiter(MAX_CONCURRENT);
 
 /** Renders the one-page summary; throws on failure or timeout. */
 export async function renderSummaryPdf(doc: SummaryDocument): Promise<Buffer> {
   registerFonts();
-  await acquire();
-  try {
-    return await withTimeout(renderToBuffer(<SummaryPdf doc={doc} />));
-  } finally {
-    release();
-  }
+  return limiter.run(() => withTimeout(renderToBuffer(<SummaryPdf doc={doc} />), TIMEOUT_MS));
 }

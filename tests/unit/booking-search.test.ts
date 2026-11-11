@@ -133,6 +133,7 @@ describe("offer filter (W-P2b)", () => {
     category: "city",
     fuelType: "petrol",
     seats: 4,
+    coverUrl: null,
     billedDays: 2,
     dailyPriceMinor: o.totalMinor / 2,
     ...o,

@@ -249,12 +249,17 @@ export async function setMaintenance(
   });
 }
 
-/** FLT-04: delete only a vehicle with no history; otherwise the UI offers archiving. */
+/**
+ * FLT-04: delete only a vehicle with no history; otherwise the UI offers archiving. A delete returns
+ * the photo keys (rows go with the vehicle) so the caller removes the objects after commit.
+ */
 export async function removeVehicle(
   pool: pg.Pool,
   input: { id: string; mode: "delete" | "archive" },
   ctx: Ctx,
-): Promise<{ ok: true } | { ok: false; code: "NOT_FOUND" | "VEHICLE_HAS_HISTORY" }> {
+): Promise<
+  { ok: true; photoKeys: string[] } | { ok: false; code: "NOT_FOUND" | "VEHICLE_HAS_HISTORY" }
+> {
   return withTenantTx(pool, ctx.tenantId, async (c) => {
     const found = await c.query<{ history: boolean }>(
       `SELECT EXISTS (SELECT 1 FROM bookings b WHERE b.tenant_id = v.tenant_id AND b.vehicle_id = v.id) AS history
@@ -268,13 +273,17 @@ export async function removeVehicle(
         "UPDATE vehicles SET archived_at = COALESCE(archived_at, $3), updated_at = $3 WHERE tenant_id = $1 AND id = $2",
         [ctx.tenantId, input.id, ctx.now],
       );
-      return { ok: true };
+      return { ok: true, photoKeys: [] };
     }
     if (vehicle.history) return { ok: false, code: "VEHICLE_HAS_HISTORY" };
+    const photos = await c.query<{ storage_key: string }>(
+      "DELETE FROM vehicle_photos WHERE tenant_id = $1 AND vehicle_id = $2 RETURNING storage_key",
+      [ctx.tenantId, input.id],
+    );
     await c.query("DELETE FROM vehicles WHERE tenant_id = $1 AND id = $2", [
       ctx.tenantId,
       input.id,
     ]);
-    return { ok: true };
+    return { ok: true, photoKeys: photos.rows.map((r) => r.storage_key) };
   });
 }

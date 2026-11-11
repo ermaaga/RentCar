@@ -120,6 +120,7 @@ describe.skipIf(!adminUrl || !appUrl)("maintenance, delete and archive (FLT-03/0
     });
     expect(await removeVehicle(app, { id: created.id, mode: "archive" }, ctx)).toEqual({
       ok: true,
+      photoKeys: [],
     });
     expect(await listVehicles(app, {}, ctx)).toEqual([]);
     expect((await listVehicles(app, { includeArchived: true }, ctx))[0]?.state).toBe("archived");
@@ -141,7 +142,10 @@ describe.skipIf(!adminUrl || !appUrl)("vehicle list and isolation (FLT-04/05)", 
       ok: false,
       code: "NOT_FOUND",
     });
-    expect(await removeVehicle(app, { id: x.id, mode: "delete" }, a)).toEqual({ ok: true });
+    expect(await removeVehicle(app, { id: x.id, mode: "delete" }, a)).toEqual({
+      ok: true,
+      photoKeys: [],
+    });
     expect(await getVehicle(app, x.id, a)).toBeNull();
   });
 });

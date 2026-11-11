@@ -28,6 +28,12 @@ const baseSchema = z.object({
   TRUSTED_PROXY_COUNT: z.coerce.number().int().min(1).max(5).optional(),
   // Time budget of one /api/jobs/run call; leftover work is picked up by the next call (8.1).
   JOBS_TIME_BUDGET_MS: z.coerce.number().int().min(1000).max(60000).default(8000),
+  // Object storage (ADR-0009, 06-backend-api 14.2). Only the local adapter exists so far; the s3
+  // adapter arrives with the production provider decision (pre-GATE 4).
+  STORAGE_PROVIDER: z.enum(["local", "s3"]).default("local"),
+  STORAGE_LOCAL_DIR: z.string().min(1).max(500).default("./.storage"),
+  UPLOAD_MAX_BYTES: z.coerce.number().int().min(65_536).max(4_194_304).default(4_194_304),
+  TENANT_STORAGE_QUOTA_BYTES: z.coerce.number().int().min(1_048_576).default(1_073_741_824),
   // Mailpit in development only: allows a private host and plaintext SMTP. Boot fails elsewhere.
   SMTP_DEV_ALLOW_PRIVATE: z
     .enum(["true", "false"])
@@ -49,10 +55,21 @@ function configProblems(cfg: BaseConfig): [string, string][] {
       "none requires SMTP_DEV_ALLOW_PRIVATE (local development only)",
     ]);
   }
+  problems.push(...storageProblems(cfg));
   if (cfg.APP_ENV === "staging" || cfg.APP_ENV === "production") {
     problems.push(...productionProblems(cfg));
   }
   return problems;
+}
+
+function storageProblems(cfg: BaseConfig): [string, string][] {
+  if (cfg.STORAGE_PROVIDER === "s3") {
+    return [["STORAGE_PROVIDER", "s3 is not available yet; use local"]];
+  }
+  if (cfg.HOST_KIND === "serverless") {
+    return [["STORAGE_PROVIDER", "local storage needs a persistent disk (HOST_KIND=server)"]];
+  }
+  return [];
 }
 
 function productionProblems(cfg: BaseConfig): [string, string][] {

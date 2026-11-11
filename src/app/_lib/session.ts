@@ -40,17 +40,27 @@ export async function requireTenant(slug: string): Promise<ResolvedTenantRow> {
   return tenant;
 }
 
-export async function requireTenantSession(slug: string) {
-  const tenant = await requireTenant(slug);
+async function tenantSession(tenant: ResolvedTenantRow) {
   const token = await tokenFor("tenant");
   const c = getContainer();
-  const session = token
-    ? await resolveSession(c.pool, {
-        realm: tenantRealm(tenant.tenantId),
-        token,
-        now: c.clock.now(),
-      })
+  return token
+    ? resolveSession(c.pool, { realm: tenantRealm(tenant.tenantId), token, now: c.clock.now() })
     : null;
+}
+
+/**
+ * Route handlers (uploads): the tenant admin or null, never a redirect, so the route answers with a
+ * status code. Unknown slugs, missing sessions and operators all give null.
+ */
+export async function findTenantAdmin(slug: string) {
+  const tenant = await resolveTenantBySlug(getContainer().pool, slug);
+  const session = tenant ? await tenantSession(tenant) : null;
+  return tenant && session?.role === "admin" ? { tenant, session } : null;
+}
+
+export async function requireTenantSession(slug: string) {
+  const tenant = await requireTenant(slug);
+  const session = await tenantSession(tenant);
   if (!session) {
     redirect(`/${tenant.slug}/admin/login`);
   }

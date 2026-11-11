@@ -83,3 +83,12 @@ export async function tokenIssued(input: {
   const { ip, ...event } = input;
   await securityEvent({ event: "auth.token.issued", outcome: "success", ...event }, ip);
 }
+
+/**
+ * Same-origin check for route handlers that change state (docs/06-backend-api.md 10.3 step 1; server
+ * actions get the framework's own check): the Origin header must equal APP_BASE_URL's origin.
+ */
+export function sameOrigin(requestHeaders: Headers): boolean {
+  const origin = requestHeaders.get("origin");
+  return origin !== null && origin === new URL(getContainer().baseUrl).origin;
+}
