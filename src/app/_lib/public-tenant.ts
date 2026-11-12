@@ -12,6 +12,7 @@ import {
 } from "@/modules/tenancy";
 import { RATE_LIMITS } from "@/platform/rate-limit/postgres";
 
+import { rootUrl } from "./seo";
 import { consume, requestIp } from "./security";
 
 // Public pages (docs/06-backend-api.md 4.4, FR-PUB-01, US-025): the tenant comes from the slug only;
@@ -59,5 +60,6 @@ export async function publicPageMetadata(slug: string, title: MessageKey): Promi
   return {
     title: `${getTranslator()(title)} · ${tenant.title}`,
     robots: { index: false, follow: false },
+    alternates: { canonical: rootUrl(getContainer().baseUrl, tenant.slug) },
   };
 }

@@ -34,6 +34,11 @@ const baseSchema = z.object({
   STORAGE_LOCAL_DIR: z.string().min(1).max(500).default("./.storage"),
   UPLOAD_MAX_BYTES: z.coerce.number().int().min(65_536).max(4_194_304).default(4_194_304),
   TENANT_STORAGE_QUOTA_BYTES: z.coerce.number().int().min(1_048_576).default(1_073_741_824),
+  // Public pages may be indexed only when "true" (docs/09-seo.md SR-06, FR-PUB-14). Fails closed.
+  PUBLIC_INDEXING_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
   // Mailpit in development only: allows a private host and plaintext SMTP. Boot fails elsewhere.
   SMTP_DEV_ALLOW_PRIVATE: z
     .enum(["true", "false"])
