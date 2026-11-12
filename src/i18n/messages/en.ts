@@ -6,6 +6,10 @@ export const en = {
   app: {
     name: "RentCar",
     description: "Car rental management",
+    notFound: {
+      title: "Page not found",
+      body: "The address you opened does not exist.",
+    },
   },
   home: {
     title: "RentCar",
