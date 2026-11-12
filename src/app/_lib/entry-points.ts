@@ -239,6 +239,7 @@ export const ENTRY_POINTS: readonly EntryPoint[] = [
   // Vehicle photos (FLT-07/09/10): admin of a writable tenant; /media serves only public variants.
   tenantEntry("route:(tenant)/[slug]/admin/vehicles/[id]/photos", "admin", "write"),
   tenantEntry(action("vehicle-photos", "setCoverPhotoAction"), "admin", "write"),
+  tenantEntry(action("vehicle-photos", "reorderPhotosAction"), "admin", "write"),
   tenantEntry(action("vehicle-photos", "deletePhotoAction"), "admin", "write"),
   {
     id: "route:media/[...key]",

@@ -2,7 +2,11 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { requireTenantSession, tenantWriteRefusal } from "@/app/_lib/session";
-import { deletePhotoAction, setCoverPhotoAction } from "@/app/actions/vehicle-photos";
+import {
+  deletePhotoAction,
+  reorderPhotosAction,
+  setCoverPhotoAction,
+} from "@/app/actions/vehicle-photos";
 import {
   removeVehicleAction,
   setMaintenanceAction,
@@ -33,6 +37,50 @@ function formValues(v: VehicleRow) {
     notes: v.notes ?? "",
     updatedAt: v.updatedAt,
   };
+}
+
+/** The full order after moving photo `i` one place earlier (-1) or later (+1); `null` at the ends. */
+function movedOrder(ids: readonly string[], i: number, step: -1 | 1): string[] | null {
+  const j = i + step;
+  if (j < 0 || j >= ids.length) return null;
+  const next = [...ids];
+  next.splice(j, 0, ...next.splice(i, 1));
+  return next;
+}
+
+/** FLT-08 move earlier / later buttons for photo `i`; a single photo has nothing to reorder. */
+function MoveControls({
+  slug,
+  vehicleId,
+  ids,
+  i,
+}: {
+  slug: string;
+  vehicleId: string;
+  ids: readonly string[];
+  i: number;
+}) {
+  if (ids.length < 2) return null;
+  const earlier = movedOrder(ids, i, -1);
+  const later = movedOrder(ids, i, 1);
+  return (
+    <>
+      {earlier ? (
+        <ConsoleActionForm
+          action={reorderPhotosAction.bind(null, slug, vehicleId, earlier)}
+          submit="vehicles.photos.moveUp"
+          submitParams={{ n: String(i + 1) }}
+        />
+      ) : null}
+      {later ? (
+        <ConsoleActionForm
+          action={reorderPhotosAction.bind(null, slug, vehicleId, later)}
+          submit="vehicles.photos.moveDown"
+          submitParams={{ n: String(i + 1) }}
+        />
+      ) : null}
+    </>
+  );
 }
 
 function AdminControls({ slug, v }: { slug: string; v: VehicleRow }) {
@@ -67,16 +115,18 @@ function AdminControls({ slug, v }: { slug: string; v: VehicleRow }) {
 async function Photos({ slug, tenantId, v }: { slug: string; tenantId: string; v: VehicleRow }) {
   const c = getContainer();
   const photos = await listVehiclePhotos(c.pool, { tenantId, vehicleId: v.id });
+  const ids = photos.map((p) => p.id);
   return (
     <PhotoManager
       vehicleName={v.name}
       target={{ slug, vehicleId: v.id, maxBytes: c.uploadMaxBytes }}
-      photos={photos.map((p) => ({
+      photos={photos.map((p, i) => ({
         id: p.id,
         small: p.small,
         isCover: p.isCover,
         controls: (
           <>
+            <MoveControls slug={slug} vehicleId={v.id} ids={ids} i={i} />
             {p.isCover ? null : (
               <ConsoleActionForm
                 action={setCoverPhotoAction.bind(null, slug, v.id, p.id)}

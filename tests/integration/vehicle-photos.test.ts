@@ -10,6 +10,7 @@ import {
   deletePhoto,
   listVehiclePhotos,
   removeVehicle,
+  reorderPhotos,
   setCoverPhoto,
   type PhotoDeps,
 } from "../../src/modules/fleet";
@@ -113,6 +114,50 @@ db("vehicle photos: refusals (FLT-07)", () => {
       ok: false,
       code: "UPLOAD_UNSUPPORTED_TYPE",
     });
+  });
+});
+
+db("vehicle photos: reorder (FLT-08)", () => {
+  it("stores the new order as positions 0..n-1 and keeps the cover with its photo", async () => {
+    const scope = await addShop(admin);
+    const [p0, p1, p2] = [await upload(scope), await upload(scope), await upload(scope)];
+    const reordered = await reorderPhotos(app, scope, [p2.id, p0.id, p1.id]);
+    expect(reordered).not.toBe("NOT_FOUND");
+    expect(reordered).not.toBe("NOT_A_PERMUTATION");
+    expect(
+      (reordered as { id: string; position: number; isCover: boolean }[]).map((p) => [
+        p.id,
+        p.position,
+        p.isCover,
+      ]),
+    ).toEqual([
+      [p2.id, 0, false],
+      [p0.id, 1, true],
+      [p1.id, 2, false],
+    ]);
+    const listed = await listVehiclePhotos(app, scope);
+    expect(listed.map((p) => p.id)).toEqual([p2.id, p0.id, p1.id]);
+  });
+
+  it("refuses anything but a permutation of the vehicle's photos and changes nothing", async () => {
+    const scope = await addShop(admin);
+    const [p0, p1] = [await upload(scope), await upload(scope)];
+    const other = await addShop(admin);
+    const foreign = await upload(other);
+    const before = (await listVehiclePhotos(app, scope)).map((p) => p.id);
+    expect(await reorderPhotos(app, scope, [p0.id])).toBe("NOT_A_PERMUTATION");
+    expect(await reorderPhotos(app, scope, [p0.id, p0.id])).toBe("NOT_A_PERMUTATION");
+    expect(await reorderPhotos(app, scope, [p0.id, foreign.id])).toBe("NOT_A_PERMUTATION");
+    expect(await reorderPhotos(app, scope, [p1.id, p0.id, foreign.id])).toBe("NOT_A_PERMUTATION");
+    expect((await listVehiclePhotos(app, scope)).map((p) => p.id)).toEqual(before);
+  });
+
+  it("answers NOT_FOUND for a vehicle of another tenant", async () => {
+    const scope = await addShop(admin);
+    const photo = await upload(scope);
+    const intruder = await addShop(admin);
+    const asIntruder = { tenantId: intruder.tenantId, vehicleId: scope.vehicleId };
+    expect(await reorderPhotos(app, asIntruder, [photo.id])).toBe("NOT_FOUND");
   });
 });
 

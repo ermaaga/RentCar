@@ -128,6 +128,11 @@ const INVOKERS: Record<string, (a: Tenant) => unknown[]> = {
   "action:actions/vehicles#setMaintenanceAction": (a) => [a.slug, randomUUID(), true],
   "action:actions/vehicles#removeVehicleAction": (a) => [a.slug, randomUUID(), "delete"],
   "action:actions/vehicle-photos#setCoverPhotoAction": (a) => [a.slug, randomUUID(), randomUUID()],
+  "action:actions/vehicle-photos#reorderPhotosAction": (a) => [
+    a.slug,
+    randomUUID(),
+    [randomUUID()],
+  ],
   "action:actions/vehicle-photos#deletePhotoAction": (a) => [a.slug, randomUUID(), randomUUID()],
   "action:actions/settings#saveSmtpAction": (a) => [a.slug, idle, form(smtpFields)],
   "action:actions/settings#testSmtpAction": (a) => [a.slug],
