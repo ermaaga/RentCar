@@ -20,6 +20,7 @@ export {
   listVehiclePhotos,
   photoUrl,
   removePhotoObjects,
+  reorderPhotos,
   setCoverPhoto,
 } from "./infrastructure/photos";
-export type { PhotoDeps } from "./infrastructure/photos";
+export type { PhotoDeps, ReorderOutcome } from "./infrastructure/photos";

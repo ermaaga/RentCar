@@ -257,3 +257,42 @@ export async function deletePhoto(
   await removeObjects(deps.storage, outcome.base);
   return outcome.photos;
 }
+
+export type ReorderOutcome = PhotoDto[] | "NOT_FOUND" | "NOT_A_PERMUTATION";
+
+/**
+ * FLT-08: `orderedIds` must be a permutation of the vehicle's photos. The vehicle row is locked, so a
+ * concurrent upload or delete cannot change the set under the check. Positions are rewritten in one
+ * statement; the deferrable unique (vehicle_id, position) is checked at commit.
+ */
+export function reorderPhotos(
+  pool: pg.Pool,
+  scope: Scope,
+  orderedIds: readonly string[],
+): Promise<ReorderOutcome> {
+  return withTenantTx(pool, scope.tenantId, async (c): Promise<ReorderOutcome> => {
+    const locked = await c.query(
+      "SELECT 1 FROM vehicles WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+      [scope.tenantId, scope.vehicleId],
+    );
+    if ((locked.rowCount ?? 0) === 0) return "NOT_FOUND";
+    const current = await c.query<{ id: string }>(
+      "SELECT id FROM vehicle_photos WHERE tenant_id = $1 AND vehicle_id = $2",
+      [scope.tenantId, scope.vehicleId],
+    );
+    const have = new Set(current.rows.map((r) => r.id));
+    const want = new Set(orderedIds);
+    const isPermutation =
+      want.size === orderedIds.length &&
+      have.size === orderedIds.length &&
+      orderedIds.every((id) => have.has(id));
+    if (!isPermutation) return "NOT_A_PERMUTATION";
+    await c.query(
+      `UPDATE vehicle_photos p SET position = (o.pos - 1)::int
+         FROM unnest($3::uuid[]) WITH ORDINALITY AS o(id, pos)
+        WHERE p.id = o.id AND p.tenant_id = $1 AND p.vehicle_id = $2`,
+      [scope.tenantId, scope.vehicleId, orderedIds],
+    );
+    return rows(c, scope);
+  });
+}
