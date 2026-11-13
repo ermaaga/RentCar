@@ -31,3 +31,10 @@ export { decideStatusChange } from "./domain/status-change";
 export { changeBookingStatus, setPayment } from "./infrastructure/staff-booking-changes";
 export type { ChangeError } from "./infrastructure/staff-booking-changes";
 export { formatLocal } from "./domain/local-time";
+export { createAdminBooking, staffVehicleOptions } from "./infrastructure/admin-create";
+export type { AdminCreateResult, StaffVehicleOption } from "./infrastructure/admin-create";
+export {
+  adminBookingInput,
+  adminBookingPeriod,
+  newIdempotencyKey,
+} from "./application/admin-booking-input";

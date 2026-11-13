@@ -19,16 +19,21 @@ export type PeriodError =
 
 const MAX_AHEAD_MS = 2 * 366 * 86_400_000;
 
+/**
+ * `staff` (admin create, A-24): a pickup in the past is allowed and skips the lead time (the booking
+ * is recorded after the fact); a future pickup still respects it. Duration rules always apply.
+ */
 export function checkPeriod(
   period: { start: Date; end: Date },
   rules: PeriodRules,
-  ctx: { now: Date; timeZone: string },
+  ctx: { now: Date; timeZone: string; staff?: boolean },
 ): { ok: true; billedDays: number } | { ok: false; code: PeriodError } {
   const { start, end } = period;
   const now = ctx.now.getTime();
+  const past = start.getTime() < now;
   if (end.getTime() <= start.getTime()) return { ok: false, code: "RETURN_BEFORE_PICKUP" };
-  if (start.getTime() < now) return { ok: false, code: "PICKUP_IN_PAST" };
-  if (start.getTime() < now + rules.leadTimeMinutes * 60_000) {
+  if (past && !ctx.staff) return { ok: false, code: "PICKUP_IN_PAST" };
+  if (!past && start.getTime() < now + rules.leadTimeMinutes * 60_000) {
     return { ok: false, code: "LEAD_TIME_NOT_MET" };
   }
   if (start.getTime() > now + MAX_AHEAD_MS) return { ok: false, code: "PERIOD_TOO_FAR" };

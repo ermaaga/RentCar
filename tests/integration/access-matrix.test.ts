@@ -134,6 +134,20 @@ const INVOKERS: Record<string, (a: Tenant) => unknown[]> = {
     randomUUID(),
     [randomUUID()],
   ],
+  "action:actions/bookings#createAdminBookingAction": (a) => [
+    a.slug,
+    { pickup: "2099-06-03T10:00", return: "2099-06-05T10:00", idempotencyKey: randomUUID() },
+    idle,
+    form({
+      vehicleId: randomUUID(),
+      firstName: "A",
+      lastName: "B",
+      phone: "+393331234567",
+      email: "",
+      paid: "",
+      notes: "",
+    }),
+  ],
   "action:actions/bookings#recordPaymentAction": (a) => [
     a.slug,
     { code: "ABCDEFGHJK", version: 1 },

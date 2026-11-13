@@ -29,7 +29,7 @@ interface Props {
   searchParams: Promise<{ done?: string | string[] }>;
 }
 
-const DONE = ["paid", "unpaid", "active", "complete", "cancel", "cancelPaid"] as const;
+const DONE = ["created", "paid", "unpaid", "active", "complete", "cancel", "cancelPaid"] as const;
 
 /** The outcome of the action that redirected here, announced once (allowlisted keys only). */
 async function DoneNotice({ searchParams }: Pick<Props, "searchParams">) {

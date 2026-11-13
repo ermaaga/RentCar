@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { singleLineText } from "../../../shared/text";
+import { looksLikeCardNumber, singleLineText } from "../../../shared/text";
 
 // FLT-01/02 input (docs/06-backend-api.md): bounded text without control characters; the daily price is
 // entered in major units (e.g. 45.50) and stored in minor units; notes refuse anything that looks like a
@@ -27,11 +27,6 @@ export const FUEL_TYPES = [
 ] as const;
 
 const text = (min: number, max: number) => singleLineText(min, max);
-
-/** 13 to 19 digits, possibly separated by spaces or dashes: treated as a card number. */
-function looksLikeCardNumber(value: string): boolean {
-  return /(?:\d[ -]?){13,19}/.test(value);
-}
 
 const MAX_PRICE_MINOR = 99_999_999;
 

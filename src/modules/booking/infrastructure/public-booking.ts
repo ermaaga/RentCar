@@ -1,14 +1,20 @@
-import { randomBytes, randomUUID } from "node:crypto";
 import type pg from "pg";
 
 import { withTenantTx } from "../../../platform/db/tenant-tx";
 import type { PublicBookingInput } from "../application/booking-input";
-import { codeFromBytes } from "../domain/booking-code";
 import type { PeriodError } from "../domain/period-rules";
 import { normalizePhone } from "../domain/phone";
 import { price } from "../domain/pricing";
 import { readSettings, resolvePeriod, type BookingSettings } from "./availability";
 import { enqueueBookingCreated, type EmailStatus } from "./booking-emails";
+import {
+  advisoryLock,
+  auditCreated,
+  insertBooking,
+  replayed,
+  resolveCustomer,
+  type NewBooking,
+} from "./booking-writes";
 
 // BKG-02 prepare and BKG-03 submit (docs/06-backend-api.md 6.x, 5.2, 5.6). The
 // submit runs in one tenant transaction: idempotency lock + replay, vehicle row lock, rules and price
@@ -16,7 +22,6 @@ import { enqueueBookingCreated, type EmailStatus } from "./booking-emails";
 // The exclusion constraint is the final guarantee: a concurrent overlap fails with 23P01.
 
 const MAX_OPEN_PER_PHONE = 3;
-const CODE_ATTEMPTS = 5;
 
 interface BookableVehicle {
   id: string;
@@ -114,126 +119,26 @@ export type SubmitResult =
     }
   | { ok: false; code: "PRICE_CHANGED"; totalMinor: number };
 
-async function lock(c: pg.ClientBase, key: string): Promise<void> {
-  await c.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [key]);
-}
-
 async function replay(
   c: pg.ClientBase,
   tenantId: string,
   input: { idempotencyKey: string; vehicleId: string },
 ): Promise<SubmitResult | null> {
-  await lock(c, `idem:${tenantId}:${input.idempotencyKey}`);
-  const res = await c.query<{ code: string; vehicle_id: string }>(
-    "SELECT code, vehicle_id FROM bookings WHERE tenant_id = $1 AND idempotency_key = $2",
-    [tenantId, input.idempotencyKey],
-  );
-  const row = res.rows[0];
-  if (!row) return null;
-  return row.vehicle_id === input.vehicleId
-    ? { ok: true, code: row.code, replayed: true }
+  const found = await replayed(c, tenantId, input);
+  if (!found) return null;
+  return found.ok
+    ? { ok: true, code: found.code, replayed: true }
     : { ok: false, code: "IDEMPOTENCY_KEY_REUSED" };
 }
 
 async function openBookingsForPhone(c: pg.ClientBase, tenantId: string, phone: string, now: Date) {
-  await lock(c, `phone:${tenantId}:${phone}`);
+  await advisoryLock(c, `phone:${tenantId}:${phone}`);
   const res = await c.query<{ n: number }>(
     `SELECT count(*)::int AS n FROM bookings b JOIN customers cu ON cu.id = b.customer_id
       WHERE b.tenant_id = $1 AND cu.phone = $2 AND b.status IN ('confirmed', 'active') AND b.end_at > $3`,
     [tenantId, phone, now],
   );
   return res.rows[0]?.n ?? 0;
-}
-
-/** CUS-06: an existing customer (same phone) is reused and never overwritten (5.6). */
-async function resolveCustomer(
-  c: pg.ClientBase,
-  tenantId: string,
-  input: { firstName: string; lastName: string; phone: string; email?: string | undefined },
-): Promise<string> {
-  await c.query(
-    `INSERT INTO customers (id, tenant_id, first_name, last_name, phone, email)
-     VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (tenant_id, phone) DO NOTHING`,
-    [randomUUID(), tenantId, input.firstName, input.lastName, input.phone, input.email ?? null],
-  );
-  const res = await c.query<{ id: string }>(
-    "SELECT id FROM customers WHERE tenant_id = $1 AND phone = $2",
-    [tenantId, input.phone],
-  );
-  const id = res.rows[0]?.id;
-  if (!id) throw new Error("customer not resolved");
-  return id;
-}
-
-interface NewBooking {
-  tenantId: string;
-  vehicleId: string;
-  customerId: string;
-  input: PublicBookingInput;
-  start: Date;
-  end: Date;
-  bufferMinutes: number;
-  price: { billedDays: number; dailyPriceMinor: number; totalMinor: number };
-  idempotencyKey: string;
-  now: Date;
-}
-
-async function insertBooking(
-  c: pg.ClientBase,
-  b: NewBooking,
-): Promise<{ id: string; code: string }> {
-  for (let attempt = 0; attempt < CODE_ATTEMPTS; attempt += 1) {
-    const id = randomUUID();
-    const code = codeFromBytes(randomBytes(10));
-    const res = await c.query(
-      `INSERT INTO bookings (id, tenant_id, code, vehicle_id, customer_id, customer_first_name,
-          customer_last_name, customer_email, start_at, end_at, buffer_minutes, status, status_changed_at,
-          daily_price_minor, billed_days, total_minor, source, idempotency_key, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'confirmed', $12, $13, $14, $15, 'public', $16, $12, $12)
-       ON CONFLICT (tenant_id, code) DO NOTHING`,
-      [
-        id,
-        b.tenantId,
-        code,
-        b.vehicleId,
-        b.customerId,
-        b.input.firstName,
-        b.input.lastName,
-        b.input.email ?? null,
-        b.start,
-        b.end,
-        b.bufferMinutes,
-        b.now,
-        b.price.dailyPriceMinor,
-        b.price.billedDays,
-        b.price.totalMinor,
-        b.idempotencyKey,
-      ],
-    );
-    if (res.rowCount === 1) return { id, code };
-  }
-  throw new Error("could not generate a unique booking code");
-}
-
-async function auditCreated(
-  c: pg.ClientBase,
-  b: NewBooking,
-  created: { id: string; code: string },
-) {
-  const changes = {
-    vehicleId: b.vehicleId,
-    startAt: b.start.toISOString(),
-    endAt: b.end.toISOString(),
-    ...b.price,
-    status: "confirmed",
-    source: "public",
-    customerId: b.customerId,
-  };
-  await c.query(
-    `INSERT INTO audit_log (id, tenant_id, created_at, actor_type, action, entity_type, entity_id, entity_ref, changes)
-     VALUES ($1, $2, $3, 'public', 'booking.created', 'booking', $4, $5, $6)`,
-    [randomUUID(), b.tenantId, b.now, created.id, created.code, JSON.stringify(changes)],
-  );
 }
 
 interface SubmitContext {
@@ -263,13 +168,18 @@ async function checkedBooking(
     booking: {
       tenantId: ctx.tenantId,
       vehicleId: v.id,
-      input,
+      customer: input,
       start: period.start,
       end: period.end,
       bufferMinutes: s.buffer_minutes,
       price: p,
       idempotencyKey: ctx.idempotencyKey,
       now: ctx.now,
+      status: "confirmed",
+      source: "public",
+      createdByUserId: null,
+      notes: null,
+      paidWith: null,
     },
   };
 }
@@ -292,7 +202,7 @@ async function submitInTx(
   const customerId = await resolveCustomer(c, ctx.tenantId, { ...input, phone });
   const booking = { ...checked.booking, customerId };
   const created = await insertBooking(c, booking);
-  await auditCreated(c, booking, created);
+  await auditCreated(c, booking, created, null);
   const emailStatus = await enqueueBookingCreated(c, {
     tenantId: ctx.tenantId,
     bookingId: created.id,

@@ -6,7 +6,16 @@ import { redirect } from "next/navigation";
 import { tenantAction } from "@/app/_lib/define-action";
 import { getContainer } from "@/composition/container";
 import type { MessageKey } from "@/i18n";
-import { changeBookingStatus, setPayment, type ChangeError } from "@/modules/booking";
+import {
+  adminBookingInput,
+  adminBookingPeriod,
+  changeBookingStatus,
+  createAdminBooking,
+  setPayment,
+  type AdminCreateResult,
+  type ChangeError,
+} from "@/modules/booking";
+import type { AdminBookingFormState } from "@/modules/booking/ui/admin-booking-form";
 import type { ConsoleActionState } from "@/modules/tenancy/ui/console-action-form";
 import { singleLineText } from "@/shared/text";
 
@@ -58,7 +67,7 @@ function ctxOf(
 }
 
 /** The outcomes the detail page can announce after a redirect (`?done=`), announced by the page. */
-type BookingDone = "paid" | "unpaid" | "active" | "complete" | "cancel" | "cancelPaid";
+type BookingDone = "created" | "paid" | "unpaid" | "active" | "complete" | "cancel" | "cancelPaid";
 
 /**
  * Success leaves the form: the panel that sent it may no longer exist (a paid booking has no
@@ -125,5 +134,103 @@ export const changeBookingStatusAction = tenantAction(
     );
     if (!result.ok) return error(ERRORS[result.code]);
     return done(tenant.slug, ref.code, result.refundOutsideSystem ? "cancelPaid" : target);
+  },
+);
+
+const ADMIN_WRITE = {
+  minRole: "admin",
+  writeClass: "write",
+  onRefused: (messageKey: MessageKey): AdminBookingFormState => ({ status: "error", messageKey }),
+} as const;
+
+const FORM_FIELDS = [
+  "vehicleId",
+  "firstName",
+  "lastName",
+  "phone",
+  "email",
+  "paid",
+  "notes",
+] as const;
+
+function typed(form: FormData): Record<string, string> {
+  return Object.fromEntries(
+    FORM_FIELDS.map((f) => {
+      const v = form.get(f);
+      return [f, typeof v === "string" ? v.slice(0, 2000) : ""];
+    }),
+  );
+}
+
+type CreateRefusal = Exclude<AdminCreateResult, { ok: true }>;
+
+function createError(
+  slug: string,
+  r: CreateRefusal,
+  values: Record<string, string>,
+): AdminBookingFormState {
+  if (r.code === "BOOKING_CONFLICT") {
+    return r.conflict
+      ? {
+          status: "error",
+          messageKey: "bookings.new.error.BOOKING_CONFLICT",
+          params: { code: r.conflict.code },
+          values,
+          conflictHref: `/${slug}/admin/bookings/${r.conflict.code}`,
+        }
+      : { status: "error", messageKey: "bookings.new.error.BOOKING_CONFLICT_UNNAMED", values };
+  }
+  const known = [
+    "PHONE_INVALID",
+    "VEHICLE_IN_MAINTENANCE",
+    "VEHICLE_ARCHIVED",
+    "NOT_FOUND",
+    "IDEMPOTENCY_KEY_REUSED",
+  ] as const;
+  const code = known.find((k) => k === r.code);
+  return {
+    status: "error",
+    messageKey: code ? `bookings.new.error.${code}` : "bookings.new.error.PERIOD",
+    values,
+    ...(code === "PHONE_INVALID" ? { fields: ["phone"] } : {}),
+  };
+}
+
+/** BKG-06 from W-D5: the page binds the checked period and a fresh idempotency key. */
+export const createAdminBookingAction = tenantAction(
+  ADMIN_WRITE,
+  async ({ tenant, session }, bound: unknown, _: AdminBookingFormState, form: FormData) => {
+    const period = adminBookingPeriod.safeParse(bound);
+    if (!period.success)
+      return { status: "error", messageKey: "bookings.new.error.PERIOD" } as const;
+    const values = typed(form);
+    const parsed = adminBookingInput.safeParse(values);
+    if (!parsed.success) {
+      const fields = parsed.error.issues.map((i) => String(i.path[0]));
+      return {
+        status: "error",
+        messageKey: "bookings.new.error.FORM_INVALID",
+        fields,
+        values,
+      } as const;
+    }
+    const { vehicleId, firstName, lastName, phone, email, paid, notes } = parsed.data;
+    const result = await createAdminBooking(
+      getContainer().pool,
+      {
+        ...period.data,
+        vehicleId,
+        customer: { firstName, lastName, phone, email },
+        paidWith: paid,
+        notes,
+      },
+      {
+        tenantId: tenant.tenantId,
+        now: getContainer().clock.now(),
+        actor: { userId: session.userId, role: session.role },
+      },
+    );
+    if (!result.ok) return createError(tenant.slug, result, values);
+    return done(tenant.slug, result.code, "created");
   },
 );

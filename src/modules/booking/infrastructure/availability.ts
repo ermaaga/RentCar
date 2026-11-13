@@ -95,6 +95,7 @@ export function resolvePeriod(
   s: BookingSettings,
   local: { pickup: string; return: string },
   now: Date,
+  staff = false,
 ): ResolvedPeriod {
   const start = parseLocal(local.pickup, s.time_zone);
   const end = parseLocal(local.return, s.time_zone);
@@ -104,7 +105,7 @@ export function resolvePeriod(
     maxRentalDays: s.max_rental_days,
     leadTimeMinutes: s.lead_time_minutes,
   };
-  const period = checkPeriod({ start, end }, rules, { now, timeZone: s.time_zone });
+  const period = checkPeriod({ start, end }, rules, { now, timeZone: s.time_zone, staff });
   if (!period.ok) return period;
   const blockedUntil = new Date(end.getTime() + s.buffer_minutes * 60_000);
   return { ok: true, start, end, blockedUntil, billedDays: period.billedDays };

@@ -11,7 +11,7 @@ import { BookingTable } from "./_components/booking-table";
 import { Pagination } from "./_components/pagination";
 
 // W-D3 bookings list (BKG-11, FR-BKG-01, US-050): admin and operator; operators see customer
-// contacts (REQ-11). New booking and CSV export arrive with BKG-06 and BKG-17.
+// contacts (REQ-11). New booking (admin) is W-D5; CSV export arrives with BKG-17.
 
 export const dynamic = "force-dynamic";
 
@@ -20,10 +20,27 @@ interface Props {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
+function Heading({ slug, admin }: { slug: string; admin: boolean }) {
+  const t = getTranslator();
+  return (
+    <div className="mt-4 mb-4 flex flex-wrap items-center justify-between gap-3">
+      <h1 className="text-2xl font-semibold">{t("bookings.title")}</h1>
+      {admin ? (
+        <Link
+          href={`/${slug}/admin/bookings/new`}
+          className="min-h-12 content-center rounded-md bg-primary px-4 font-semibold text-primary-foreground"
+        >
+          {t("bookings.new.link")}
+        </Link>
+      ) : null}
+    </div>
+  );
+}
+
 export default async function BookingsPage(props: Props) {
   const t = getTranslator();
   const { slug } = await props.params;
-  const { tenant } = await requireTenantSession(slug);
+  const { tenant, session } = await requireTenantSession(slug);
   const query = parseAdminBookingQuery(await props.searchParams);
   const c = getContainer();
   const ctx = { tenantId: tenant.tenantId, now: c.clock.now(), timeZone: tenant.timeZone };
@@ -41,7 +58,7 @@ export default async function BookingsPage(props: Props) {
       <Link href={`/${tenant.slug}/admin`} className="underline underline-offset-4">
         {t("admin.home.title")}
       </Link>
-      <h1 className="mt-4 mb-4 text-2xl font-semibold">{t("bookings.title")}</h1>
+      <Heading slug={tenant.slug} admin={session.role === "admin"} />
       <BookingFilters slug={tenant.slug} query={query} vehicles={vehicles} />
       <h2 className="mt-6 mb-3 text-lg font-semibold">
         <span role="status">{count}</span>
