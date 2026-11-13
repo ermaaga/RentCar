@@ -128,4 +128,25 @@ async function expectInStaffList(page: Page, slug: string, code: string): Promis
   await expect(page.getByRole("main")).toContainText("Amount due €120.00");
   await expect(page.getByRole("heading", { name: "History" })).toBeVisible();
   await expectAccessible(page);
+  await payThenCancel(page);
+}
+
+/** W-D4 actions (BKG-09/10): record a cash payment, then cancel the paid booking with a reason. */
+async function payThenCancel(page: Page): Promise<void> {
+  await page.getByText("Record payment").click();
+  await page.getByLabel("Cash").check();
+  await page.getByRole("button", { name: "Mark as paid" }).click();
+  await expect(page.getByText("Payment recorded.")).toBeVisible();
+  await expect(page.getByRole("main")).toContainText("Paid €120.00 (Cash)");
+  await expectAccessible(page);
+
+  await page.getByText("Cancel booking").click();
+  await expect(page.getByText("Refunds happen outside RentCar.").first()).toBeVisible();
+  await page.getByLabel("Reason (optional)").fill("Customer called");
+  await page.getByRole("button", { name: "Cancel this booking" }).click();
+  await expect(page.getByText("Booking cancelled. It was paid")).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("note")).toContainText("Customer called");
+  await expect(page.getByRole("heading", { name: "Actions" })).toHaveCount(0);
+  await expect(page.getByRole("main")).toContainText("Marked as paid");
 }

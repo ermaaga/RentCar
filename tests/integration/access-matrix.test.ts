@@ -134,6 +134,24 @@ const INVOKERS: Record<string, (a: Tenant) => unknown[]> = {
     randomUUID(),
     [randomUUID()],
   ],
+  "action:actions/bookings#recordPaymentAction": (a) => [
+    a.slug,
+    { code: "ABCDEFGHJK", version: 1 },
+    idle,
+    form({ method: "card" }),
+  ],
+  "action:actions/bookings#clearPaymentAction": (a) => [
+    a.slug,
+    { code: "ABCDEFGHJK", version: 1 },
+    idle,
+    form({ confirm: "yes" }),
+  ],
+  "action:actions/bookings#changeBookingStatusAction": (a) => [
+    a.slug,
+    { code: "ABCDEFGHJK", version: 1, target: "cancel" },
+    idle,
+    form({}),
+  ],
   "action:actions/settings#saveSmtpAction": (a) => [a.slug, idle, form(smtpFields)],
   "action:actions/settings#testSmtpAction": (a) => [a.slug],
   "action:actions/tenancy#createTenantAction": () => [idle, form({ name: "x" })],
@@ -205,7 +223,15 @@ beforeAll(async () => {
     PASSWORD_PEPPER: "p".repeat(40),
   });
   admin = new pg.Pool({ connectionString: adminUrl, max: 2 });
-  for (const file of ["auth", "operators", "settings", "tenancy", "vehicles", "vehicle-photos"]) {
+  for (const file of [
+    "auth",
+    "bookings",
+    "operators",
+    "settings",
+    "tenancy",
+    "vehicles",
+    "vehicle-photos",
+  ]) {
     modules[file] = (await import(`../../src/app/actions/${file}.ts`)) as Record<string, Action>;
   }
   a = await tenant();

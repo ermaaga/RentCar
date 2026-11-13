@@ -77,12 +77,9 @@ describe("route registry: guards", () => {
       } else {
         expect(head, e.id).toContain("tenantAction(");
         // Either inline options or a shared constant of the same file (its minRole is read from it).
-        const options = head.includes("minRole")
-          ? head
-          : source.slice(
-              source.indexOf("const ADMIN_WRITE = "),
-              source.indexOf("const ADMIN_WRITE = ") + 200,
-            );
+        const shared = /tenantAction\(\s*([A-Z_]+),/.exec(head)?.[1];
+        const at = shared ? source.indexOf(`const ${shared} = `) : -1;
+        const options = shared ? source.slice(at, at + 200) : head;
         expect(/minRole: "(\w+)"/.exec(options)?.[1], e.id).toBe(e.minRole);
       }
     }

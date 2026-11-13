@@ -140,6 +140,9 @@ export async function listAdminBookings(
 
 export interface AdminBookingDetail extends AdminBookingRow {
   id: string;
+  /** Instants, for previews computed on the server (early completion). */
+  startAt: Date;
+  endAt: Date;
   customerId: string;
   email: string | null;
   vehicleId: string;
@@ -234,6 +237,8 @@ function toDetail(r: DetailRow, ctx: Ctx): Omit<AdminBookingDetail, "emailStatus
     vehicleName: r.vehicle,
     pickup: formatLocal(r.start_at, ctx.timeZone),
     return: formatLocal(r.end_at, ctx.timeZone),
+    startAt: r.start_at,
+    endAt: r.end_at,
     status: effectiveStatus(r.status, r.start_at, r.end_at, ctx.now),
     billedDays: r.billed_days,
     dailyPriceMinor: Number(r.daily_price_minor),

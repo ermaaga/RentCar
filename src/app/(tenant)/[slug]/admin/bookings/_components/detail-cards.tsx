@@ -1,4 +1,4 @@
-import { formatMessage, getTranslator } from "@/i18n";
+import { formatMessage, getTranslator, type MessageKey } from "@/i18n";
 import { balanceMinor, type AdminBookingDetail } from "@/modules/booking";
 
 import { localLabel, money } from "../../../_components/format";
@@ -167,12 +167,16 @@ export function HistoryCard({ items }: { items: NonNullable<AdminBookingDetail["
   );
 }
 
-const ACTIONS = ["created", "updated", "cancelled", "status_changed", "paid", "unpaid"] as const;
+const ACTIONS: Record<string, MessageKey> = {
+  "booking.created": "bookings.detail.action.created",
+  "booking.updated": "bookings.detail.action.updated",
+  "booking.cancelled": "bookings.detail.action.cancelled",
+  "booking.status_changed": "bookings.detail.action.status_changed",
+  "payment.recorded": "bookings.detail.action.paid",
+  "payment.cleared": "bookings.detail.action.unpaid",
+};
 
 function historyAction(action: string): string {
-  const t = getTranslator();
-  const name = action.replace(/^booking\./, "");
-  return (ACTIONS as readonly string[]).includes(name)
-    ? t(`bookings.detail.action.${name as (typeof ACTIONS)[number]}`)
-    : action;
+  const key = ACTIONS[action];
+  return key ? getTranslator()(key) : action;
 }

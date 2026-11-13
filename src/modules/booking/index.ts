@@ -27,3 +27,7 @@ export { BOOKING_STATUSES, balanceMinor } from "./domain/booking-status";
 export type { BookingStatus } from "./domain/booking-status";
 export { getAdminBooking, listAdminBookings } from "./infrastructure/admin-bookings";
 export type { AdminBookingDetail, AdminBookingRow } from "./infrastructure/admin-bookings";
+export { decideStatusChange } from "./domain/status-change";
+export { changeBookingStatus, setPayment } from "./infrastructure/staff-booking-changes";
+export type { ChangeError } from "./infrastructure/staff-booking-changes";
+export { formatLocal } from "./domain/local-time";

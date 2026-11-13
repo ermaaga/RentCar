@@ -4,6 +4,7 @@ import { requireTenantSession } from "@/app/_lib/session";
 import { getContainer } from "@/composition/container";
 import { formatMessage, getTranslator } from "@/i18n";
 import { getAdminBooking, type AdminBookingDetail } from "@/modules/booking";
+import { Alert } from "@/ui/alert";
 
 import {
   CustomerCard,
@@ -13,17 +14,38 @@ import {
   PriceCard,
   RentalCard,
 } from "../_components/detail-cards";
+import { BookingActions } from "../_components/booking-actions";
 import { PaymentChip, StatusChip } from "../_components/status-chip";
 import { localLabel } from "../../../_components/format";
 
-// W-D4 booking detail (BKG-12, FR-BKG-02/14), read only in this slice: actions (payment, status,
-// edit, resend) arrive with BKG-08..10/15. A code of another tenant is the same "not found".
+// W-D4 booking detail (BKG-12, FR-BKG-02/14) with the admin's payment and status actions (BKG-09/10);
+// edit and resend arrive with BKG-08/15. A code of another tenant is the same "not found".
 // Operators: contacts yes (REQ-11), history and PDF no.
 
 export const dynamic = "force-dynamic";
 
 interface Props {
   params: Promise<{ slug: string; code: string }>;
+  searchParams: Promise<{ done?: string | string[] }>;
+}
+
+const DONE = ["paid", "unpaid", "active", "complete", "cancel", "cancelPaid"] as const;
+
+/** The outcome of the action that redirected here, announced once (allowlisted keys only). */
+async function DoneNotice({ searchParams }: Pick<Props, "searchParams">) {
+  const value = (await searchParams).done;
+  const key = DONE.find((d) => d === value);
+  return key ? (
+    <Alert kind="status">{getTranslator()(`bookings.actions.done.${key}`)}</Alert>
+  ) : null;
+}
+
+function BackLink({ slug }: { slug: string }) {
+  return (
+    <Link href={`/${slug}/admin/bookings`} className="underline underline-offset-4">
+      {getTranslator()("bookings.detail.back")}
+    </Link>
+  );
 }
 
 function Header({ b, pdf }: { b: AdminBookingDetail; pdf: string | null }) {
@@ -63,11 +85,7 @@ export default async function BookingDetailPage(props: Props) {
   const c = getContainer();
   const ctx = { tenantId: tenant.tenantId, now: c.clock.now(), timeZone: tenant.timeZone };
   const b = await getAdminBooking(c.pool, { code, withHistory: admin }, ctx);
-  const back = (
-    <Link href={`/${tenant.slug}/admin/bookings`} className="underline underline-offset-4">
-      {t("bookings.detail.back")}
-    </Link>
-  );
+  const back = <BackLink slug={tenant.slug} />;
   if (!b) {
     return (
       <main className="mx-auto max-w-3xl px-4 py-6">
@@ -79,7 +97,17 @@ export default async function BookingDetailPage(props: Props) {
   return (
     <main className="mx-auto flex max-w-3xl flex-col gap-4 px-4 py-6">
       {back}
+      <DoneNotice searchParams={props.searchParams} />
       <Header b={b} pdf={admin ? `/${tenant.slug}/booking/${b.code}/pdf` : null} />
+      {admin ? (
+        <BookingActions
+          slug={tenant.slug}
+          b={b}
+          currency={tenant.currency}
+          timeZone={tenant.timeZone}
+          now={ctx.now}
+        />
+      ) : null}
       <CustomerCard b={b} />
       <RentalCard b={b} timeZone={tenant.timeZone} />
       <PriceCard b={b} currency={tenant.currency} />

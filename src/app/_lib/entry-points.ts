@@ -236,6 +236,10 @@ export const ENTRY_POINTS: readonly EntryPoint[] = [
   tenantEntry("page:(tenant)/[slug]/admin/operators", "admin", "read"),
   tenantEntry("page:(tenant)/[slug]/admin/bookings", "operator", "read"),
   tenantEntry("page:(tenant)/[slug]/admin/bookings/[code]", "operator", "read"),
+  // Payment and status changes (BKG-09/10): admin, allowed while read-only (BE-1 A).
+  tenantEntry(action("bookings", "recordPaymentAction"), "admin", "ro_allowed"),
+  tenantEntry(action("bookings", "clearPaymentAction"), "admin", "ro_allowed"),
+  tenantEntry(action("bookings", "changeBookingStatusAction"), "admin", "ro_allowed"),
   tenantEntry("page:(tenant)/[slug]/admin/vehicles", "operator", "read"),
   tenantEntry("page:(tenant)/[slug]/admin/vehicles/[id]", "operator", "read"),
   // Vehicle photos (FLT-07/08/09/10): admin of a writable tenant; /media serves only public variants.
