@@ -94,6 +94,7 @@ test("a customer books a car and sees the confirmation with the code", async ({ 
   await page.getByRole("button", { name: "Confirm booking" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Booking confirmed" })).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`/${slug}/booking/[0-9A-Z]{10}$`));
+  const code = page.url().split("/").at(-1) ?? "";
   await expect(page.getByText("Thank you, Mario. Your booking is confirmed.")).toBeVisible();
   await expect(page.getByRole("main")).not.toContainText("mario@rentcar.localhost");
   await expectAccessible(page);
@@ -108,4 +109,23 @@ test("a customer books a car and sees the confirmation with the code", async ({ 
     "This car was just booked by someone else. Choose another car.",
   );
   expect((await page.goto(`/${slug}/booking/0000000000`))?.status()).toBe(404);
+
+  await expectInStaffList(page, slug, code);
 });
+
+/** W-D3/W-D4: the admin (still signed in) finds the booking by name and opens its detail. */
+async function expectInStaffList(page: Page, slug: string, code: string): Promise<void> {
+  await page.goto(`/${slug}/admin/bookings`);
+  await expect(page.getByRole("heading", { level: 1, name: "Bookings" })).toBeVisible();
+  await expect(page.getByRole("status")).toHaveText("1 booking");
+  await page.getByLabel("Search bookings").fill("Rossi");
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(page).toHaveURL(/q=Rossi/);
+  await expectAccessible(page);
+  await page.getByRole("link", { name: code }).locator("visible=true").click();
+  await expect(page.getByRole("heading", { level: 1, name: code })).toBeVisible();
+  await expect(page.getByRole("main")).toContainText("3 days × €40.00 = €120.00");
+  await expect(page.getByRole("main")).toContainText("Amount due €120.00");
+  await expect(page.getByRole("heading", { name: "History" })).toBeVisible();
+  await expectAccessible(page);
+}

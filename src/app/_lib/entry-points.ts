@@ -234,6 +234,8 @@ export const ENTRY_POINTS: readonly EntryPoint[] = [
   { id: "page:(tenant)/[slug]/admin", realm: "tenant", minRole: "operator", writeClass: "read" },
   tenantEntry("page:(tenant)/[slug]/admin/account", "operator", "read"),
   tenantEntry("page:(tenant)/[slug]/admin/operators", "admin", "read"),
+  tenantEntry("page:(tenant)/[slug]/admin/bookings", "operator", "read"),
+  tenantEntry("page:(tenant)/[slug]/admin/bookings/[code]", "operator", "read"),
   tenantEntry("page:(tenant)/[slug]/admin/vehicles", "operator", "read"),
   tenantEntry("page:(tenant)/[slug]/admin/vehicles/[id]", "operator", "read"),
   // Vehicle photos (FLT-07/08/09/10): admin of a writable tenant; /media serves only public variants.
