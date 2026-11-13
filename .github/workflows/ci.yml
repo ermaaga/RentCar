@@ -137,6 +137,17 @@ jobs:
           TEST_SMTP_HOST: 127.0.0.1
           TEST_MAILPIT_API: http://127.0.0.1:8025
         run: pnpm run test:integration
+      - name: Start PgBouncer in transaction mode (spike S1, local part)
+        run: |
+          sudo apt-get install -y --no-install-recommends pgbouncer
+          sudo systemctl stop pgbouncer || true
+          tests/security/pgbouncer/start.sh "$ROLE_APP_PASSWORD"
+      - name: GUC bleed through the pooler (ABU-M0-04/05, 1,000 concurrent transactions)
+        env:
+          TEST_DATABASE_ADMIN_URL: postgres://rentcar_admin:${{ env.PGPASSWORD }}@127.0.0.1:5432/rentcar
+          TEST_POOLER_URL: postgres://rentcar_app:${{ env.ROLE_APP_PASSWORD }}@127.0.0.1:6432/rentcar
+          GUC_BLEED_VOLUME: "1000"
+        run: pnpm exec vitest run tests/security/guc-bleed.test.ts
 
   e2e:
     name: end-to-end (Playwright, desktop and phone widths)

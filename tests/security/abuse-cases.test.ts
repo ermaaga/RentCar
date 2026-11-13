@@ -23,12 +23,17 @@ export const M0_ABUSE_CASES: AbuseCase[] = [
     gap: "no tenant tables before M1 (RLS policies)",
   },
   { id: "ABU-M0-03", status: "pending", evidence: [], gap: "no tenant tables before M1" },
-  { id: "ABU-M0-04", status: "pending", evidence: [], gap: "tenant context and pooler (spike S1)" },
+  {
+    id: "ABU-M0-04",
+    status: "partial",
+    evidence: ["tests/security/guc-bleed.test.ts", "tests/integration/rls.test.ts"],
+    gap: "verified through a local PgBouncer in transaction mode; the provider pooler is spike S1 (CSM-5)",
+  },
   {
     id: "ABU-M0-05",
-    status: "pending",
-    evidence: [],
-    gap: "spike S1 with real transaction pooler",
+    status: "partial",
+    evidence: ["tests/security/guc-bleed.test.ts"],
+    gap: "1,000 concurrent transactions through a local PgBouncer in CI; the provider pooler is spike S1 (CSM-5)",
   },
   {
     id: "ABU-M0-06",
